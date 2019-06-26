@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	"github.com/prometheus/prometheus/pkg/value"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/util/stats"
+	//logto "log"
 )
 
 const (
@@ -298,6 +300,55 @@ func (ng *Engine) NewInstantQuery(q storage.Queryable, qs string, ts time.Time) 
 
 	return qry, nil
 }
+func (ng *Engine) NewInstantQuerySloved(q storage.Queryable, qs string, ts time.Time) (Query, error) {
+
+	for i := 0; i < len(qs)-2; i++ {
+		if strings.Index(qs[i:], " >= ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " >= ", " < ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " <= ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " <= ", " > ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " > ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " > ", " <= ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " < ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " < ", " >= ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " or ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " or ", " and ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " OR ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " OR ", " and ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " and ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " and ", " or ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " AND ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " AND ", " or ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " == ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " == ", " != ", 1)
+			i += 2
+		} else if strings.Index(qs[i:], " != ") == 0 {
+			qs = qs[:i] +  strings.Replace(qs[i:], " != ", " == ", 1)
+			i += 2
+		} else {
+		}
+		 
+	}
+
+	//logto.Println("qs")
+	//logto.Println(qs)
+	expr, err := ParseExpr(qs)
+	if err != nil {
+		return nil, err
+	}
+	qry := ng.newQuery(q, expr, ts, ts, 0)
+	qry.q = qs
+
+	return qry, nil
+}
 
 // NewRangeQuery returns an evaluation query for the given time range and with
 // the resolution set by the interval.
@@ -365,6 +416,7 @@ func (ng *Engine) exec(ctx context.Context, q *query) (Value, storage.Warnings, 
 	queueSpanTimer, _ := q.stats.GetSpanTimer(ctx, stats.ExecQueueTime, ng.metrics.queryQueueTime)
 
 	if err := ng.gate.Start(ctx); err != nil {
+		//logto.Println("query queue")
 		return nil, nil, contextErr(err, "query queue")
 	}
 	defer ng.gate.Done()
@@ -381,6 +433,7 @@ func (ng *Engine) exec(ctx context.Context, q *query) (Value, storage.Warnings, 
 
 	// The base context might already be canceled on the first iteration (e.g. during shutdown).
 	if err := contextDone(ctx, env); err != nil {
+		//logto.Println("context Done")
 		return nil, nil, err
 	}
 

@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+	"unicode"
 )
 
 const (
@@ -97,7 +98,7 @@ func (ln LabelName) IsValid() bool {
 		return false
 	}
 	for i, b := range ln {
-		if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_' || (b >= '0' && b <= '9' && i > 0)) {
+		if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_' || (b >= '0' && b <= '9' && i > 0) || unicode.Is(unicode.Han, b)) {
 			return false
 		}
 	}

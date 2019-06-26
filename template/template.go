@@ -78,7 +78,7 @@ func (q queryResultByLabelSorter) Swap(i, j int) {
 // QueryFunc executes a PromQL query at the given time.
 type QueryFunc func(context.Context, string, time.Time) (promql.Vector, error)
 
-func query(ctx context.Context, q string, ts time.Time, queryFn QueryFunc) (queryResult, error) {
+func query(ctx context.Context, q string, ts time.Time, queryFn QueryFunc) (queryResult, error ) {
 	vector, err := queryFn(ctx, q, ts)
 	if err != nil {
 		return nil, err

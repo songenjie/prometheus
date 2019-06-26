@@ -60,6 +60,9 @@ import (
 	"github.com/prometheus/prometheus/storage/tsdb"
 	"github.com/prometheus/prometheus/util/strutil"
 	"github.com/prometheus/prometheus/web"
+	logto "log"
+	"strconv"
+	"io/ioutil"
 )
 
 var (
@@ -119,6 +122,8 @@ func main() {
 		corsRegexString string
 
 		promlogConfig promlog.Config
+		autoreloaddir string
+		metricstonode string
 	}{
 		notifier: notifier.Options{
 			Registerer: prometheus.DefaultRegisterer,
@@ -131,6 +136,12 @@ func main() {
 	a.Version(version.Print("prometheus"))
 
 	a.HelpFlag.Short('h')
+
+	a.Flag("autoreloaddir", "autoreloads Rules .").
+		Default("/data/prometheus/autoreload").StringVar(&cfg.autoreloaddir)
+
+	a.Flag("metricstonode", "put prometheus start time to node_exporter .").
+		Default("/data/node_exporter/prometheus.prom").StringVar(&cfg.metricstonode)
 
 	a.Flag("config.file", "Prometheus configuration file path.").
 		Default("prometheus.yml").StringVar(&cfg.configFile)
@@ -318,7 +329,13 @@ func main() {
 	// Above level 6, the k8s client would log bearer tokens in clear-text.
 	klog.ClampLevel(6)
 	klog.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
-
+	
+	startinterval := "prometheus_start_time_millisecond{realip=\""+cfg.web.ListenAddress+"\"} " + strconv.FormatInt(time.Now().UnixNano()/1e6,10) + "\n"
+	err = ioutil.WriteFile(cfg.metricstonode,[]byte(startinterval), 0644)
+	if err != nil {
+		logto.Println("WriteFile " + cfg.metricstonode + " file failed!")
+	}
+	
 	level.Info(logger).Log("msg", "Starting Prometheus", "version", version.Info())
 	level.Info(logger).Log("build_context", version.BuildContext())
 	level.Info(logger).Log("host_details", prom_runtime.Uname())
@@ -366,6 +383,7 @@ func main() {
 			OutageTolerance: time.Duration(cfg.outageTolerance),
 			ForGracePeriod:  time.Duration(cfg.forGracePeriod),
 			ResendDelay:     time.Duration(cfg.resendDelay),
+			Autoreloaddir:   cfg.autoreloaddir,
 		})
 	)
 
@@ -541,6 +559,7 @@ func main() {
 				<-reloadReady.C
 
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
+				//标记
 				level.Info(logger).Log("msg", "Scrape manager stopped")
 				return err
 			},
@@ -612,6 +631,14 @@ func main() {
 
 				webHandler.Ready()
 				level.Info(logger).Log("msg", "Server is ready to receive web requests.")
+				startinterval := "prometheus_run_time_millisecond{realip=\""+cfg.web.ListenAddress+"\"} " + strconv.FormatInt(time.Now().UnixNano()/1e6,10) + "\n"
+				f, err := os.OpenFile(cfg.metricstonode, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				if err == nil {
+					defer f.Close()
+					if _, err := f.Write([]byte(startinterval)); err != nil {
+						logto.Println("Append " + cfg.metricstonode + " file failed!")
+					}
+				}
 				<-cancel
 				return nil
 			},
@@ -824,13 +851,30 @@ func sendAlerts(s sender, externalURL string) rules.NotifyFunc {
 			}
 			if !alert.ResolvedAt.IsZero() {
 				a.EndsAt = alert.ResolvedAt
+				a.State = 1
 			} else {
 				a.EndsAt = alert.ValidUntil
+				a.State = 0
+			}
+			logto.Println("alert")
+			logto.Println(alert.State)
+			logto.Println(alert.Annotations)
+			logto.Println(alert.FiredAt)
+			if !alert.ResolvedAt.IsZero() {
+				logto.Println(alert.ResolvedAt)
+			} else {
+				logto.Println(alert.ValidUntil)
 			}
 			res = append(res, a)
 		}
 
 		if len(alerts) > 0 {
+			/*for _, re := range res {
+				logto.Println(re.Labels)
+				logto.Println(re.Annotations)
+				logto.Println(re.StartsAt)
+				logto.Println(re.EndsAt)
+			}*/
 			s.Send(res...)
 		}
 	}
