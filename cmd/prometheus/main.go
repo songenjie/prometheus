@@ -851,13 +851,15 @@ func sendAlerts(s sender, externalURL string) rules.NotifyFunc {
 			}
 			if !alert.ResolvedAt.IsZero() {
 				a.EndsAt = alert.ResolvedAt
+				logto.Println("Resolved")
 				a.State = 1
 			} else {
 				a.EndsAt = alert.ValidUntil
+				logto.Println("Firing")
 				a.State = 0
 			}
-			logto.Println("alert")
 			logto.Println(alert.State)
+			logto.Println(alert.Labels)
 			logto.Println(alert.Annotations)
 			logto.Println(alert.FiredAt)
 			if !alert.ResolvedAt.IsZero() {
