@@ -37,10 +37,10 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/storage"
 	"gopkg.in/fsnotify/fsnotify.v1"
-//        "github.com/prometheus/prometheus/config"
+	//        "github.com/prometheus/prometheus/config"
 	logto "log"
-	"strings"
 	"os"
+	"strings"
 )
 
 // RuleHealth describes the health state of a rule.
@@ -160,13 +160,13 @@ func NewGroupMetrics(reg prometheus.Registerer) *Metrics {
 }
 
 // QueryFunc processes PromQL queries.
-type QueryFunc func(ctx context.Context, q string, t time.Time) (promql.Vector, error )
+type QueryFunc func(ctx context.Context, q string, t time.Time) (promql.Vector, error)
 
 // EngineQueryFunc returns a new query function that executes instant queries against
 // the given engine.
 // It converts scalar into vector results.
 func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
-	return func(ctx context.Context, qs string, t time.Time) (promql.Vector, error ) {
+	return func(ctx context.Context, qs string, t time.Time) (promql.Vector, error) {
 		qfunc, err := engine.NewInstantQuery(q, qs, t)
 		if err != nil {
 			return nil, err
@@ -177,11 +177,7 @@ func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
 		}
 		switch v := res.Value.(type) {
 		case promql.Vector:
-			/*logto.Println("Vector")
-			logto.Println(v)
-			logto.Println("Vector")*/
 			if len(v) == 0 {
-				//logto.Println("go to Resoleve")
 				qfunc, err = engine.NewInstantQuerySloved(q, qs, t)
 				if err != nil {
 					return nil, err
@@ -192,7 +188,7 @@ func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
 				}
 				switch v := res.Value.(type) {
 				case promql.Vector:
-					return v, errors.New("this is a Resolved func")
+					return v, nil
 				default:
 					return nil, errors.New("rule result is not a vector or scalar")
 				}
@@ -737,13 +733,13 @@ func (g *Group) RestoreForState(ts time.Time) {
 
 // The Manager manages recording and alerting rules.
 type Manager struct {
-	opts     *ManagerOptions
-	groups   map[string]*Group
-	mtx      sync.RWMutex
-	block    chan struct{}
-	restored bool
+	opts      *ManagerOptions
+	groups    map[string]*Group
+	mtx       sync.RWMutex
+	block     chan struct{}
+	restored  bool
 	iswatched bool
-	logger log.Logger
+	logger    log.Logger
 }
 
 // Appendable returns an Appender.
@@ -768,8 +764,8 @@ type ManagerOptions struct {
 	ForGracePeriod  time.Duration
 	ResendDelay     time.Duration
 	Autoreloaddir   string
-        externalLabels labels.Labels
-	Metrics *Metrics
+	externalLabels  labels.Labels
+	Metrics         *Metrics
 }
 
 // NewManager returns an implementation of Manager, ready to be started
@@ -942,8 +938,8 @@ func (m *Manager) MiniUpdate(interval time.Duration, files []string, isRemove bo
 		}
 		return nil
 	}
-//	var cfg *config.Config
-//      groups, errs := m.LoadGroups(interval, cfg.GlobalConfig.ExternalLabels, files...)
+	//	var cfg *config.Config
+	//      groups, errs := m.LoadGroups(interval, cfg.GlobalConfig.ExternalLabels, files...)
 	groups, errs := m.LoadGroups(interval, nil, files...)
 	if errs != nil {
 		for _, e := range errs {
@@ -974,6 +970,7 @@ func (m *Manager) MiniUpdate(interval time.Duration, files []string, isRemove bo
 	wg.Wait()
 	return nil
 }
+
 // LoadGroups reads groups from a list of files.
 func (m *Manager) LoadGroups(
 	interval time.Duration, externalLabels labels.Labels, filenames ...string,
