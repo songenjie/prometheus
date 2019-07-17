@@ -36,7 +36,6 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/template"
 	"github.com/prometheus/prometheus/util/strutil"
-	logto "log"
 )
 
 const (
@@ -292,13 +291,13 @@ func (r *AlertingRule) SetRestored(restored bool) {
 // resolvedRetention is the duration for which a resolved alert instance
 // is kept in memory state and consequentally repeatedly sent to the AlertManager.
 const resolvedRetention = 15 * time.Minute
+
 // Eval evaluates the rule expression and then creates pending alerts and fires
 // or removes previously pending alerts accordingly.
 func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, externalURL *url.URL) (promql.Vector, error) {
 	res, err := query(ctx, r.vector.String(), ts)
 	if err != nil {
 		if err.Error() != "this is a Resolved func" {
-			logto.Println(err)
 			r.SetHealth(HealthBad)
 			r.SetLastError(err)
 			return nil, err
@@ -316,7 +315,6 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 	var vec promql.Vector
 
 	if err == nil {
-		//logto.Println("firing")
 		for _, smpl := range res {
 			// Provide the alert information to the template.
 			l := make(map[string]string, len(smpl.Metric))
@@ -367,15 +365,12 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 			h := lbs.Hash()
 			resultFPs[h] = struct{}{}
 
-			/*logto.Println("current")
-			logto.Println(annotations)
-			logto.Println("current down")*/
 			// Check whether we already have alerting state for the identifying label set.
 			// Update the last value and annotations if so, create a new alert entry otherwise.
 			if alert, ok := r.active[h]; ok && alert.State != StateInactive {
 				alert.Value = smpl.V
 				alert.Annotations = annotations
-					
+
 				continue
 			}
 
@@ -388,7 +383,6 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 			}
 		}
 	} else {
-		//logto.Println("Resolved")
 		for _, smpl := range res {
 			// Provide the alert information to the template.
 			l := make(map[string]string, len(smpl.Metric))
@@ -439,15 +433,11 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 			h := lbs.Hash()
 			resultResolved[h] = struct{}{}
 
-			/*logto.Println("current")
-			logto.Println(annotations)
-			logto.Println("current down")*/
 			// Check whether we already have alerting state for the identifying label set.
 			// Update the last value and annotations if so, create a new alert entry otherwise.
 			if alert, ok := r.active[h]; ok && alert.State != StateInactive {
 				alert.Value = smpl.V
 				alert.Annotations = annotations
-				//a.State = StateInactive
 				alert.Labels = lbs
 				continue
 			}
@@ -457,7 +447,7 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 
 	// Check if any pending alerts should be removed or fire now. Write out alert timeseries.
 	for fp, a := range r.active {
-		if a.State == StateInactive {			
+		if a.State == StateInactive {
 			delete(r.active, fp)
 		}
 		if _, ok := resultFPs[fp]; !ok {
@@ -469,7 +459,6 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 			if a.State != StateInactive {
 				a.State = StateInactive
 				a.ResolvedAt = ts
-				//logto.Println(a)
 			}
 			continue
 		}
@@ -485,11 +474,10 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 		}
 	}
 
-
 	// We have already acquired the lock above hence using SetHealth and
 	// SetLastError will deadlock.
 	r.health = HealthGood
-	r.lastError = err
+	r.lastError = nil
 	return vec, nil
 }
 
@@ -551,14 +539,14 @@ func (r *AlertingRule) sendAlerts(ctx context.Context, ts time.Time, resendDelay
 	alerts := []*Alert{}
 	r.ForEachActiveAlert(func(alert *Alert) {
 		if alert.needsSending(ts, resendDelay) {
-			
+
 			alert.LastSentAt = ts
 			// Allow for a couple Eval or Alertmanager send failures
 			delta := resendDelay
 			if interval > resendDelay {
 				delta = interval
 			}
-			//firing time 
+			//firing time
 			alert.ValidUntil = ts.Add(3 * delta)
 			anew := *alert
 			alerts = append(alerts, &anew)

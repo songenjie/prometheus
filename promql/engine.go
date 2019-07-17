@@ -22,8 +22,8 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -304,42 +304,40 @@ func (ng *Engine) NewInstantQuerySloved(q storage.Queryable, qs string, ts time.
 
 	for i := 0; i < len(qs)-2; i++ {
 		if strings.Index(qs[i:], " >= ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " >= ", " < ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " >= ", " < ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " <= ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " <= ", " > ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " <= ", " > ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " > ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " > ", " <= ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " > ", " <= ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " < ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " < ", " >= ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " < ", " >= ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " or ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " or ", " and ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " or ", " and ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " OR ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " OR ", " and ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " OR ", " and ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " and ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " and ", " or ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " and ", " or ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " AND ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " AND ", " or ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " AND ", " or ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " == ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " == ", " != ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " == ", " != ", 1)
 			i += 2
 		} else if strings.Index(qs[i:], " != ") == 0 {
-			qs = qs[:i] +  strings.Replace(qs[i:], " != ", " == ", 1)
+			qs = qs[:i] + strings.Replace(qs[i:], " != ", " == ", 1)
 			i += 2
 		} else {
 		}
-		 
+
 	}
 
-	//logto.Println("qs")
-	//logto.Println(qs)
 	expr, err := ParseExpr(qs)
 	if err != nil {
 		return nil, err
