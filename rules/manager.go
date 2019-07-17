@@ -188,7 +188,7 @@ func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
 				}
 				switch v := res.Value.(type) {
 				case promql.Vector:
-					return v, nil
+					return v, errors.New("this is a Resolved func")
 				default:
 					return nil, errors.New("rule result is not a vector or scalar")
 				}
@@ -535,13 +535,6 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 				g.metrics.evalFailures.Inc()
 				return
 			}
-			/*if ar, ok := rule.(*AlertingRule); ok {
-				logto.Println("activate")
-				for _ ,v := range ar.active{
-					logto.Println(v)
-				}
-				logto.Println("activate")
-			}*/
 			if ar, ok := rule.(*AlertingRule); ok {
 				ar.sendAlerts(ctx, ts, g.opts.ResendDelay, g.interval, g.opts.NotifyFunc)
 			}
