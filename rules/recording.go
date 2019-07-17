@@ -75,9 +75,11 @@ func (rule *RecordingRule) Labels() labels.Labels {
 func (rule *RecordingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, _ *url.URL) (promql.Vector, error) {
 	vector, err := query(ctx, rule.vector.String(), ts)
 	if err != nil {
-		rule.SetHealth(HealthBad)
-		rule.SetLastError(err)
-		return nil, err
+		if err.Error() != "this is a Resolved func" {
+			rule.SetHealth(HealthBad)
+			rule.SetLastError(err)
+			return nil, err
+		}
 	}
 	// Override the metric name and labels.
 	for i := range vector {
@@ -98,7 +100,7 @@ func (rule *RecordingRule) Eval(ctx context.Context, ts time.Time, query QueryFu
 		sample.Metric = lb.Labels()
 	}
 	rule.SetHealth(HealthGood)
-	rule.SetLastError(err)
+	rule.SetLastError(nil)
 	return vector, nil
 }
 
