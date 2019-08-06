@@ -898,17 +898,17 @@ func (m *Manager) watch(p string) {
 			// different combinations of operations. For all practical purposes
 			// this is inaccurate.
 			// The most reliable solution is to reload everything if anything happens.
-			//TODO: 时间应从m的参数得到
 			if event.Op^fsnotify.Remove == 0 || event.Op^fsnotify.Rename == 0 {
 				// REMOVE
 				// RENAME: RENAME -> CREATE -> WRITE -> WRITE
 				logto.Printf("remove %s", []string{event.Name})
-				m.MiniUpdate(1*time.Minute, []string{event.Name}, true)
+				m.MiniUpdate(time.Duration(promql.GetDefaultEvaluationInterval())*time.Millisecond, []string{event.Name}, true)
 			} else {
 				//CREATE -> WRITE
 				//WRITE -> WRITE
+
 				logto.Printf("write %s", []string{event.Name})
-				m.MiniUpdate(1*time.Minute, []string{event.Name}, false)
+				m.MiniUpdate(time.Duration(promql.GetDefaultEvaluationInterval())*time.Millisecond, []string{event.Name}, false)
 			}
 		}
 	}
