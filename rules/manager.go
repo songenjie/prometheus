@@ -26,7 +26,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 
@@ -923,9 +923,9 @@ func (m *Manager) MiniUpdate(interval time.Duration, files []string, isRemove bo
 			for gn, oldg := range m.groups {
 				if strings.HasSuffix(gn, fname) {
 					delete(m.groups, gn)
-					go func() {
-						oldg.stop()
-					}()
+					go func(g *Group) {
+						g.stop()
+					}(oldg)
 				}
 			}
 		}
