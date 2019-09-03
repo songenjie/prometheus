@@ -79,6 +79,9 @@ func (rule *RecordingRule) Eval(ctx context.Context, ts time.Time, query QueryFu
 			rule.SetHealth(HealthBad)
 			rule.SetLastError(err)
 			return nil, err
+		}else {
+			// when data is null we will return null
+			return nil,nil
 		}
 	}
 	// Override the metric name and labels.

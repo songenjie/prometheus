@@ -29,7 +29,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
@@ -302,41 +302,42 @@ func (ng *Engine) NewInstantQuery(q storage.Queryable, qs string, ts time.Time) 
 }
 func (ng *Engine) NewInstantQuerySloved(q storage.Queryable, qs string, ts time.Time) (Query, error) {
 
-	for i := 0; i < len(qs)-2; i++ {
+	for i := len(qs); i > 0; i-- {
 		if strings.Index(qs[i:], " >= ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " >= ", " < ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " <= ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " <= ", " > ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " > ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " > ", " <= ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " < ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " < ", " >= ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " or ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " or ", " and ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " OR ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " OR ", " and ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " and ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " and ", " or ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " AND ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " AND ", " or ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " == ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " == ", " != ", 1)
-			i += 2
+			break
 		} else if strings.Index(qs[i:], " != ") == 0 {
 			qs = qs[:i] + strings.Replace(qs[i:], " != ", " == ", 1)
-			i += 2
+			break
 		} else {
 		}
 
 	}
+
 
 	expr, err := ParseExpr(qs)
 	if err != nil {
