@@ -35,14 +35,14 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	conntrack "github.com/mwitkow/go-conntrack"
+	"github.com/mwitkow/go-conntrack"
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/version"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"gopkg.in/alecthomas/kingpin.v2"
 	"k8s.io/klog"
 
 	promlogflag "github.com/prometheus/common/promlog/flag"
@@ -60,9 +60,9 @@ import (
 	"github.com/prometheus/prometheus/storage/tsdb"
 	"github.com/prometheus/prometheus/util/strutil"
 	"github.com/prometheus/prometheus/web"
+	"io/ioutil"
 	logto "log"
 	"strconv"
-	"io/ioutil"
 )
 
 var (
@@ -329,13 +329,13 @@ func main() {
 	// Above level 6, the k8s client would log bearer tokens in clear-text.
 	klog.ClampLevel(6)
 	klog.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
-	
-	startinterval := "prometheus_start_time_millisecond{realip=\""+cfg.web.ListenAddress+"\"} " + strconv.FormatInt(time.Now().UnixNano()/1e6,10) + "\n"
-	err = ioutil.WriteFile(cfg.metricstonode,[]byte(startinterval), 0644)
+
+	startinterval := "prometheus_start_time_millisecond{realip=\"" + cfg.web.ListenAddress + "\"} " + strconv.FormatInt(time.Now().UnixNano()/1e6, 10) + "\n"
+	err = ioutil.WriteFile(cfg.metricstonode, []byte(startinterval), 0644)
 	if err != nil {
 		logto.Println("WriteFile " + cfg.metricstonode + " file failed!")
 	}
-	
+
 	level.Info(logger).Log("msg", "Starting Prometheus", "version", version.Info())
 	level.Info(logger).Log("build_context", version.BuildContext())
 	level.Info(logger).Log("host_details", prom_runtime.Uname())
@@ -631,7 +631,7 @@ func main() {
 
 				webHandler.Ready()
 				level.Info(logger).Log("msg", "Server is ready to receive web requests.")
-				startinterval := "prometheus_run_time_millisecond{realip=\""+cfg.web.ListenAddress+"\"} " + strconv.FormatInt(time.Now().UnixNano()/1e6,10) + "\n"
+				startinterval := "prometheus_run_time_millisecond{realip=\"" + cfg.web.ListenAddress + "\"} " + strconv.FormatInt(time.Now().UnixNano()/1e6, 10) + "\n"
 				f, err := os.OpenFile(cfg.metricstonode, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 				if err == nil {
 					defer f.Close()
@@ -854,7 +854,13 @@ func sendAlerts(s sender, externalURL string) rules.NotifyFunc {
 				logto.Println("Resolved")
 				a.State = 1
 			} else {
-				a.EndsAt = alert.ValidUntil
+				if ((alert.ValidUntil.UnixNano() - time.Now().UnixNano()) > int64(5*time.Minute)) {
+					a.EndsAt = alert.ValidUntil
+				} else {
+					//at least 5 min
+					a.EndsAt = time.Now().Add(time.Minute * 5)
+				}
+
 				logto.Println("Firing")
 				a.State = 0
 			}
