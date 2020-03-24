@@ -146,7 +146,7 @@ func (rws *WriteStorage) ApplyConfig(conf *config.Config) error {
 			continue
 		}
 
-		c, err := NewClient(name, &ClientConfig{
+		c, err := NewClient(prometheus.DefaultRegisterer, name, &ClientConfig{
 			URL:              rwConf.URL,
 			Timeout:          rwConf.RemoteTimeout,
 			HTTPClientConfig: rwConf.HTTPClientConfig,

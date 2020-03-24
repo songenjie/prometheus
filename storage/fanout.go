@@ -91,7 +91,33 @@ func (f *fanout) Querier(ctx context.Context, mint, maxt int64) (Querier, error)
 		queriers = append(queriers, querier)
 	}
 
-	return NewMergeQuerier(primaryQuerier, queriers, ChainedSeriesMerge), nil
+	return NewMergeQuerier(primaryQuerier, queriers, ChainingSeriesMerge), nil
+}
+
+func (f *fanout) ChunkQuerier(ctx context.Context, mint, maxt int64) (ChunkQuerier, error) {
+	queriers := make([]ChunkQuerier, 0, 1+len(f.secondaries))
+
+	// Add primary querier.
+	primaryQuerier, err := f.primary.ChunkQuerier(ctx, mint, maxt)
+	if err != nil {
+		return nil, err
+	}
+	queriers = append(queriers, primaryQuerier)
+
+	// Add secondary queriers.
+	for _, storage := range f.secondaries {
+		querier, err := storage.ChunkQuerier(ctx, mint, maxt)
+		if err != nil {
+			for _, q := range queriers {
+				// TODO(bwplotka): Log error.
+				_ = q.Close()
+			}
+			return nil, err
+		}
+		queriers = append(queriers, querier)
+	}
+
+	return NewMergeChunkQuerier(primaryQuerier, queriers, NewCompactingChunkSeriesMerger(ChainingSeriesMerge)), nil
 }
 
 func (f *fanout) Appender() Appender {
@@ -231,7 +257,8 @@ func NewMergeQuerier(primaryQuerier Querier, queriers []Querier, mergeFunc Verti
 // NewMergeChunkQuerier will return NoopChunkQuerier if no chunk queriers are passed to it,
 // and will filter NoopQuerieNoopChunkQuerierrs from its arguments, in order to reduce overhead
 // when only one chunk querier is passed.
-func NewMergeChunkQuerier(primaryQuerier ChunkQuerier, queriers []ChunkQuerier, merger VerticalChunkSeriesMergerFunc) ChunkQuerier {
+// TODO(bwplotka): Currently merge will compact overlapping chunks with bigger chunk, without limit. Split it: https://github.com/prometheus/tsdb/issues/670
+func NewMergeChunkQuerier(primaryQuerier ChunkQuerier, queriers []ChunkQuerier, mergeFunc VerticalChunkSeriesMergeFunc) ChunkQuerier {
 	filtered := make([]genericQuerier, 0, len(queriers))
 	for _, querier := range queriers {
 		if _, ok := querier.(noopChunkQuerier); !ok && querier != nil {
@@ -248,7 +275,7 @@ func NewMergeChunkQuerier(primaryQuerier ChunkQuerier, queriers []ChunkQuerier, 
 	}
 
 	return &chunkQuerierAdapter{&mergeGenericQuerier{
-		mergeFunc:      (&chunkSeriesMergerAdapter{VerticalChunkSeriesMergerFunc: merger}).Merge,
+		mergeFunc:      (&chunkSeriesMergerAdapter{VerticalChunkSeriesMergeFunc: mergeFunc}).Merge,
 		primaryQuerier: newGenericQuerierFromChunk(primaryQuerier),
 		queriers:       filtered,
 		failedQueriers: make(map[genericQuerier]struct{}),
@@ -432,32 +459,30 @@ type genericMergeSeriesSet struct {
 	querier     *mergeGenericQuerier
 }
 
-// VerticalSeriesMergeFunc returns merged series implementation that merges series with same labels together.
-// It has to handle time-overlapped series as well.
+// VerticalSeriesMergeFunc returns merged series implementation that merges potentially time-overlapping series with same labels together.
 type VerticalSeriesMergeFunc func(...Series) Series
 
-// VerticalChunkSeriesMergerFunc returns merged chunk series implementation that merges series with same labels together.
-// It has to handle time-overlapped chunk series as well.
-type VerticalChunkSeriesMergerFunc func(...ChunkSeries) ChunkSeries
-
-// NewMergeSeriesSet returns a new SeriesSet that merges results of chkQuerierSeries SeriesSets.
-func NewMergeSeriesSet(sets []SeriesSet, merger VerticalSeriesMergeFunc) SeriesSet {
+// NewMergeSeriesSet returns a new SeriesSet that merges many SeriesSet together.
+func NewMergeSeriesSet(sets []SeriesSet, mergeFunc VerticalSeriesMergeFunc) SeriesSet {
 	genericSets := make([]genericSeriesSet, 0, len(sets))
 	for _, s := range sets {
 		genericSets = append(genericSets, &genericSeriesSetAdapter{s})
 
 	}
-	return &seriesSetAdapter{newGenericMergeSeriesSet(genericSets, nil, (&seriesMergerAdapter{VerticalSeriesMergeFunc: merger}).Merge)}
+	return &seriesSetAdapter{newGenericMergeSeriesSet(genericSets, nil, (&seriesMergerAdapter{VerticalSeriesMergeFunc: mergeFunc}).Merge)}
 }
 
-// NewMergeChunkSeriesSet returns a new ChunkSeriesSet that merges results of chkQuerierSeries ChunkSeriesSets.
-func NewMergeChunkSeriesSet(sets []ChunkSeriesSet, merger VerticalChunkSeriesMergerFunc) ChunkSeriesSet {
+// VerticalChunkSeriesMergeFunc returns merged chunk series implementation that merges potentially time-overlapping chunk series with same labels together.
+type VerticalChunkSeriesMergeFunc func(...ChunkSeries) ChunkSeries
+
+// NewMergeChunkSeriesSet returns a new ChunkSeriesSet that merges many SeriesSet together.
+func NewMergeChunkSeriesSet(sets []ChunkSeriesSet, mergeFunc VerticalChunkSeriesMergeFunc) ChunkSeriesSet {
 	genericSets := make([]genericSeriesSet, 0, len(sets))
 	for _, s := range sets {
 		genericSets = append(genericSets, &genericChunkSeriesSetAdapter{s})
 
 	}
-	return &chunkSeriesSetAdapter{newGenericMergeSeriesSet(genericSets, nil, (&chunkSeriesMergerAdapter{VerticalChunkSeriesMergerFunc: merger}).Merge)}
+	return &chunkSeriesSetAdapter{newGenericMergeSeriesSet(genericSets, nil, (&chunkSeriesMergerAdapter{VerticalChunkSeriesMergeFunc: mergeFunc}).Merge)}
 }
 
 // newGenericMergeSeriesSet returns a new genericSeriesSet that merges (and deduplicates)
@@ -569,11 +594,14 @@ func (h *genericSeriesSetHeap) Pop() interface{} {
 	return x
 }
 
-// ChainedSeriesMerge returns single series from many same series by chaining samples together.
+// ChainingSeriesMerge returns single series from many same series by chaining samples together.
 // In case of the timestamp overlap, the first overlapped sample is kept and the rest samples with the same timestamps
 // are dropped. We expect the same labels for each given series.
-// TODO(bwplotka): This has the same logic as tsdb.verticalChainedSeries. Remove this in favor of ChainedSeriesMerge in next PRs.
-func ChainedSeriesMerge(s ...Series) Series {
+//
+// This works the best with replicated series, where data from two series are exactly the same. This does not work well
+// with "almost" the same data, e.g. from 2 Prometheus HA replicas. This is fine, since from the Prometheus perspective
+// this never happens.
+func ChainingSeriesMerge(s ...Series) Series {
 	if len(s) == 0 {
 		return nil
 	}
@@ -696,32 +724,25 @@ func (h *samplesIteratorHeap) Pop() interface{} {
 	return x
 }
 
-// VerticalChunkMergeFunc represents a function that merges multiple time overlapping chunks.
-// Passed chunks:
-// * have to be sorted by MinTime.
-// * have to be part of exactly the same timeseries.
-// * have to be populated.
-type VerticalChunksMergeFunc func(chks ...chunks.Meta) chunks.Iterator
-
 type verticalChunkSeriesMerger struct {
-	verticalChunksMerger VerticalChunksMergeFunc
-
-	labels labels.Labels
-	series []ChunkSeries
+	mergeFunc VerticalSeriesMergeFunc
+	labels    labels.Labels
+	series    []ChunkSeries
 }
 
-// NewVerticalChunkSeriesMerger returns VerticalChunkSeriesMerger that merges the same chunk series into one or more chunks.
-// In case of the chunk overlap, given VerticalChunkMergeFunc will be used.
+// NewCompactingChunkSeriesMerger returns VerticalChunkSeriesMergeFunc that merges the same chunk series into one chunk series.
+// In case of the chunk overlaps, it compacts overlapping chunks into one or more time-ordered chunks with merged data.
+// Samples from overlapped chunks are merged using *series* (not chunk) vertical merge func.
 // It expects the same labels for each given series.
-func NewVerticalChunkSeriesMerger(chunkMerger VerticalChunksMergeFunc) VerticalChunkSeriesMergerFunc {
+func NewCompactingChunkSeriesMerger(mergeFunc VerticalSeriesMergeFunc) VerticalChunkSeriesMergeFunc {
 	return func(s ...ChunkSeries) ChunkSeries {
 		if len(s) == 0 {
 			return nil
 		}
 		return &verticalChunkSeriesMerger{
-			verticalChunksMerger: chunkMerger,
-			labels:               s[0].Labels(),
-			series:               s,
+			mergeFunc: mergeFunc,
+			labels:    s[0].Labels(),
+			series:    s,
 		}
 	}
 }
@@ -735,31 +756,33 @@ func (s *verticalChunkSeriesMerger) Iterator() chunks.Iterator {
 	for _, series := range s.series {
 		iterators = append(iterators, series.Iterator())
 	}
-	return &chainChunkIterator{
-		overlappedChunksMerger: s.verticalChunksMerger,
-		iterators:              iterators,
-		h:                      nil,
+	return &verticalChunkIterator{
+		mergeFunc: s.mergeFunc,
+		labels:    s.labels,
+		iterators: iterators,
 	}
 }
 
-// chainChunkIterator is responsible to chain chunks from different iterators of same time series.
-// If they are time overlapping overlappedChunksMerger will be used.
-type chainChunkIterator struct {
-	overlappedChunksMerger VerticalChunksMergeFunc
-
+// verticalChunkIterator is responsible to chain chunks from different iterators of same time series.
+// If time-overlapping chunks are found, they are encoded and passed to series mergeFunc and encoded again into one bigger chunk.
+// TODO(bwplotka): Currently merge will compact overlapping chunks with bigger chunk, without limit. Split it: https://github.com/prometheus/tsdb/issues/670
+type verticalChunkIterator struct {
+	mergeFunc VerticalSeriesMergeFunc
+	labels    labels.Labels
 	iterators []chunks.Iterator
-	h         chunkIteratorHeap
+
+	h chunkIteratorHeap
 }
 
-func (c *chainChunkIterator) At() chunks.Meta {
+func (c *verticalChunkIterator) At() chunks.Meta {
 	if len(c.h) == 0 {
-		panic("chainChunkIterator.At() called after .Next() returned false.")
+		panic("verticalChunkIterator.At() called after .Next() returned false.")
 	}
 
 	return c.h[0].At()
 }
 
-func (c *chainChunkIterator) Next() bool {
+func (c *verticalChunkIterator) Next() bool {
 	if c.h == nil {
 		for _, iter := range c.iterators {
 			if iter.Next() {
@@ -776,7 +799,7 @@ func (c *chainChunkIterator) Next() bool {
 
 	// Detect the shortest chain of time-overlapped chunks.
 	last := c.At()
-	var overlapped []chunks.Meta
+	var overlapped []Series
 	for {
 		iter := heap.Pop(&c.h).(chunks.Iterator)
 		if iter.Next() {
@@ -792,17 +815,32 @@ func (c *chainChunkIterator) Next() bool {
 			// No overlap with last one.
 			break
 		}
-		overlapped = append(overlapped, last)
+		overlapped = append(overlapped, &chunkToSeriesDecoder{
+			labels: c.labels,
+			Meta:   last,
+		})
 		last = next
 	}
-	if len(overlapped) > 0 {
-		heap.Push(&c.h, c.overlappedChunksMerger(append(overlapped, c.At())...))
-		return true
+
+	if len(overlapped) == 0 {
+		return len(c.h) > 0
 	}
-	return len(c.h) > 0
+
+	// Add last, not yet included overlap.
+	overlapped = append(overlapped, &chunkToSeriesDecoder{
+		labels: c.labels,
+		Meta:   c.At(),
+	})
+
+	// TODO(bwplotka): We could have a quick path for **exactly** the same chunks.
+	// Before we do this we might need to add micro benchmark first.
+
+	var chkSeries ChunkSeries = &seriesToChunkEncoder{Series: c.mergeFunc(overlapped...)}
+	heap.Push(&c.h, chkSeries)
+	return true
 }
 
-func (c *chainChunkIterator) Err() error {
+func (c *verticalChunkIterator) Err() error {
 	for _, iter := range c.iterators {
 		if err := iter.Err(); err != nil {
 			return err

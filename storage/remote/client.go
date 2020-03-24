@@ -27,6 +27,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/version"
@@ -44,6 +45,8 @@ type Client struct {
 	url        *config_util.URL
 	client     *http.Client
 	timeout    time.Duration
+
+	queries prometheus.Gauge
 }
 
 // ClientConfig configures a Client.
@@ -54,17 +57,35 @@ type ClientConfig struct {
 }
 
 // NewClient creates a new Client.
-func NewClient(remoteName string, conf *ClientConfig) (*Client, error) {
+func NewClient(reg prometheus.Registerer, name string, conf *ClientConfig) (*Client, error) {
 	httpClient, err := config_util.NewClientFromConfig(conf.HTTPClientConfig, "remote_storage", false)
 	if err != nil {
 		return nil, err
 	}
 
+	queries := prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_read_queries",
+			Help:      "The number of in-flight remote read queries.",
+			ConstLabels: prometheus.Labels{
+				remoteName: name,
+				endpoint:   conf.URL.String(),
+			},
+		},
+	)
+
+	if reg != nil {
+		reg.MustRegister(queries)
+	}
+
 	return &Client{
-		remoteName: remoteName,
+		remoteName: name,
 		url:        conf.URL,
 		client:     httpClient,
 		timeout:    time.Duration(conf.Timeout),
+		queries:    queries,
 	}, nil
 }
 
@@ -126,6 +147,9 @@ func (c Client) Endpoint() string {
 
 // Read reads from a remote endpoint.
 func (c *Client) Read(ctx context.Context, query *prompb.Query) (*prompb.QueryResult, error) {
+	c.queries.Inc()
+	defer c.queries.Dec()
+
 	req := &prompb.ReadRequest{
 		// TODO: Support batching multiple queries into one read request,
 		// as the protobuf interface allows for it.

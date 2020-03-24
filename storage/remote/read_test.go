@@ -22,11 +22,11 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/pkg/errors"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/prompb"
-	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/util/testutil"
 )
 
@@ -40,7 +40,7 @@ func TestNoDuplicateReadConfigs(t *testing.T) {
 		URL: &config_util.URL{
 			URL: &url.URL{
 				Scheme: "http",
-				Host:   "localhost",
+				Host:   "localhost1",
 			},
 		},
 	}
@@ -49,7 +49,7 @@ func TestNoDuplicateReadConfigs(t *testing.T) {
 		URL: &config_util.URL{
 			URL: &url.URL{
 				Scheme: "http",
-				Host:   "localhost",
+				Host:   "localhost2",
 			},
 		},
 	}
@@ -57,7 +57,7 @@ func TestNoDuplicateReadConfigs(t *testing.T) {
 		URL: &config_util.URL{
 			URL: &url.URL{
 				Scheme: "http",
-				Host:   "localhost",
+				Host:   "localhost3",
 			},
 		},
 	}
@@ -103,26 +103,6 @@ func TestNoDuplicateReadConfigs(t *testing.T) {
 
 		err = s.Close()
 		testutil.Ok(t, err)
-	}
-}
-
-func TestExternalLabelsQuerierSelect(t *testing.T) {
-	matchers := []*labels.Matcher{
-		labels.MustNewMatcher(labels.MatchEqual, "job", "api-server"),
-	}
-	q := &externalLabelsQuerier{
-		Querier: mockQuerier{},
-		externalLabels: labels.Labels{
-			{Name: "region", Value: "europe"},
-		},
-	}
-	want := newSeriesSetFilter(mockSeriesSet{}, q.externalLabels)
-	have, _, err := q.Select(false, nil, matchers...)
-	if err != nil {
-		t.Error(err)
-	}
-	if !reflect.DeepEqual(want, have) {
-		t.Errorf("expected series set %+v, got %+v", want, have)
 	}
 }
 
@@ -181,7 +161,7 @@ func TestExternalLabelsQuerierAddExternalLabels(t *testing.T) {
 	}
 
 	for i, test := range tests {
-		q := &externalLabelsQuerier{Querier: mockQuerier{}, externalLabels: test.el}
+		q := &querier{externalLabels: test.el}
 		matchers, added := q.addExternalLabels(test.inMatchers)
 
 		sort.Slice(test.outMatchers, func(i, j int) bool { return test.outMatchers[i].Name < test.outMatchers[j].Name })
@@ -231,182 +211,215 @@ func TestSeriesSetFilter(t *testing.T) {
 	}
 }
 
-type mockQuerier struct {
-	ctx        context.Context
-	mint, maxt int64
-
-	storage.Querier
+type mockedRemoteClient struct {
+	got   *prompb.Query
+	resps *prompb.QueryResult
 }
 
-type mockSeriesSet struct {
-	storage.SeriesSet
+func (c *mockedRemoteClient) Read(_ context.Context, query *prompb.Query) (*prompb.QueryResult, error) {
+	if c.got != nil {
+		return nil, errors.Errorf("expected only one call to remote client got: %v", query)
+	}
+	c.got = query
+	return c.resps, nil
 }
 
-func (mockQuerier) Select(bool, *storage.SelectHints, ...*labels.Matcher) (storage.SeriesSet, storage.Warnings, error) {
-	return mockSeriesSet{}, nil, nil
-}
+// NOTE: We don't test ChunkQuerier as it's uses Querier for all operations.
+func TestAllQueryableClient(t *testing.T) {
+	_ = &mockedRemoteClient{} // TODO
 
-func TestPreferLocalStorageFilter(t *testing.T) {
-	ctx := context.Background()
-
-	tests := []struct {
-		localStartTime int64
-		mint           int64
-		maxt           int64
-		querier        storage.Querier
+	for _, _ = range []struct {
 	}{
-		{
-			localStartTime: int64(100),
-			mint:           int64(0),
-			maxt:           int64(50),
-			querier:        mockQuerier{ctx: ctx, mint: 0, maxt: 50},
-		},
-		{
-			localStartTime: int64(20),
-			mint:           int64(0),
-			maxt:           int64(50),
-			querier:        mockQuerier{ctx: ctx, mint: 0, maxt: 20},
-		},
-		{
-			localStartTime: int64(20),
-			mint:           int64(30),
-			maxt:           int64(50),
-			querier:        storage.NoopQuerier(),
-		},
-	}
+		{},
+	} {
+		t.Run("", func(t *testing.T) {
 
-	for i, test := range tests {
-		f := PreferLocalStorageFilter(
-			storage.QueryableFunc(func(ctx context.Context, mint, maxt int64) (storage.Querier, error) {
-				return mockQuerier{ctx: ctx, mint: mint, maxt: maxt}, nil
-			}),
-			func() (int64, error) { return test.localStartTime, nil },
-		)
-
-		q, err := f.Querier(ctx, test.mint, test.maxt)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.querier != q {
-			t.Errorf("%d. expected querier %+v, got %+v", i, test.querier, q)
-		}
+		})
 	}
 }
 
-func TestRequiredMatchersFilter(t *testing.T) {
-	ctx := context.Background()
-
-	f := RequiredMatchersFilter(
-		storage.QueryableFunc(func(ctx context.Context, mint, maxt int64) (storage.Querier, error) {
-			return mockQuerier{ctx: ctx, mint: mint, maxt: maxt}, nil
-		}),
-		[]*labels.Matcher{labels.MustNewMatcher(labels.MatchEqual, "special", "label")},
-	)
-
-	want := &requiredMatchersQuerier{
-		Querier:          mockQuerier{ctx: ctx, mint: 0, maxt: 50},
-		requiredMatchers: []*labels.Matcher{labels.MustNewMatcher(labels.MatchEqual, "special", "label")},
-	}
-	have, err := f.Querier(ctx, 0, 50)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !reflect.DeepEqual(want, have) {
-		t.Errorf("expected querier %+v, got %+v", want, have)
-	}
-}
-
-func TestRequiredLabelsQuerierSelect(t *testing.T) {
-	tests := []struct {
-		requiredMatchers []*labels.Matcher
-		matchers         []*labels.Matcher
-		seriesSet        storage.SeriesSet
-	}{
-		{
-			requiredMatchers: []*labels.Matcher{},
-			matchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-			},
-			seriesSet: mockSeriesSet{},
-		},
-		{
-			requiredMatchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-			},
-			matchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-			},
-			seriesSet: mockSeriesSet{},
-		},
-		{
-			requiredMatchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-			},
-			matchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchRegexp, "special", "label"),
-			},
-			seriesSet: storage.NoopSeriesSet(),
-		},
-		{
-			requiredMatchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-			},
-			matchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "different"),
-			},
-			seriesSet: storage.NoopSeriesSet(),
-		},
-		{
-			requiredMatchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-			},
-			matchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
-			},
-			seriesSet: mockSeriesSet{},
-		},
-		{
-			requiredMatchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
-			},
-			matchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-				labels.MustNewMatcher(labels.MatchEqual, "foo", "baz"),
-			},
-			seriesSet: storage.NoopSeriesSet(),
-		},
-		{
-			requiredMatchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
-			},
-			matchers: []*labels.Matcher{
-				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
-				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
-			},
-			seriesSet: mockSeriesSet{},
-		},
-	}
-
-	for i, test := range tests {
-		q := &requiredMatchersQuerier{
-			Querier:          mockQuerier{},
-			requiredMatchers: test.requiredMatchers,
-		}
-
-		have, _, err := q.Select(false, nil, test.matchers...)
-		if err != nil {
-			t.Error(err)
-		}
-		if want := test.seriesSet; want != have {
-			t.Errorf("%d. expected series set %+v, got %+v", i, want, have)
-		}
-		if want, have := test.requiredMatchers, q.requiredMatchers; !reflect.DeepEqual(want, have) {
-			t.Errorf("%d. requiredMatchersQuerier.Select() has modified the matchers", i)
-		}
-	}
-}
+// TODO(bwplotka): Embed all of those above ^
+//func TestExternalLabelsQuerierSelect(t *testing.T) {
+//	matchers := []*labels.Matcher{
+//		labels.MustNewMatcher(labels.MatchEqual, "job", "api-server"),
+//	}
+//	q := &querier{
+//		Querier: mockQuerier{},
+//		externalLabels: labels.Labels{
+//			{Name: "region", Value: "europe"},
+//		},
+//	}
+//	want := newSeriesSetFilter(mockSeriesSet{}, q.externalLabels)
+//	have, _, err := q.Select(false, nil, matchers...)
+//	if err != nil {
+//		t.Error(err)
+//	}
+//	if !reflect.DeepEqual(want, have) {
+//		t.Errorf("expected series set %+v, got %+v", want, have)
+//	}
+//}
+//
+//func TestPreferLocalStorageFilter(t *testing.T) {
+//	ctx := context.Background()
+//
+//	tests := []struct {
+//		localStartTime int64
+//		mint           int64
+//		maxt           int64
+//		querier        storage.Querier
+//	}{
+//		{
+//			localStartTime: int64(100),
+//			mint:           int64(0),
+//			maxt:           int64(50),
+//			querier:        mockQuerier{ctx: ctx, mint: 0, maxt: 50},
+//		},
+//		{
+//			localStartTime: int64(20),
+//			mint:           int64(0),
+//			maxt:           int64(50),
+//			querier:        mockQuerier{ctx: ctx, mint: 0, maxt: 20},
+//		},
+//		{
+//			localStartTime: int64(20),
+//			mint:           int64(30),
+//			maxt:           int64(50),
+//			querier:        storage.NoopQuerier(),
+//		},
+//	}
+//
+//	for i, test := range tests {
+//		f := PreferLocalStorageFilter(
+//			storage.QueryableFunc(func(ctx context.Context, mint, maxt int64) (storage.Querier, error) {
+//				return mockQuerier{ctx: ctx, mint: mint, maxt: maxt}, nil
+//			}),
+//			func() (int64, error) { return test.localStartTime, nil },
+//		)
+//
+//		q, err := f.Querier(ctx, test.mint, test.maxt)
+//		if err != nil {
+//			t.Fatal(err)
+//		}
+//
+//		if test.querier != q {
+//			t.Errorf("%d. expected querier %+v, got %+v", i, test.querier, q)
+//		}
+//	}
+//}
+//
+//func TestRequiredMatchersFilter(t *testing.T) {
+//	ctx := context.Background()
+//
+//	f := RequiredMatchersFilter(
+//		storage.QueryableFunc(func(ctx context.Context, mint, maxt int64) (storage.Querier, error) {
+//			return mockQuerier{ctx: ctx, mint: mint, maxt: maxt}, nil
+//		}),
+//		[]*labels.Matcher{labels.MustNewMatcher(labels.MatchEqual, "special", "label")},
+//	)
+//
+//	want := &requiredMatchersQuerier{
+//		Querier:          mockQuerier{ctx: ctx, mint: 0, maxt: 50},
+//		requiredMatchers: []*labels.Matcher{labels.MustNewMatcher(labels.MatchEqual, "special", "label")},
+//	}
+//	have, err := f.Querier(ctx, 0, 50)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//
+//	if !reflect.DeepEqual(want, have) {
+//		t.Errorf("expected querier %+v, got %+v", want, have)
+//	}
+//}
+//
+//func TestRequiredLabelsQuerierSelect(t *testing.T) {
+//	tests := []struct {
+//		requiredMatchers []*labels.Matcher
+//		matchers         []*labels.Matcher
+//		seriesSet        storage.SeriesSet
+//	}{
+//		{
+//			requiredMatchers: []*labels.Matcher{},
+//			matchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//			},
+//			seriesSet: mockSeriesSet{},
+//		},
+//		{
+//			requiredMatchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//			},
+//			matchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//			},
+//			seriesSet: mockSeriesSet{},
+//		},
+//		{
+//			requiredMatchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//			},
+//			matchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchRegexp, "special", "label"),
+//			},
+//			seriesSet: storage.NoopSeriesSet(),
+//		},
+//		{
+//			requiredMatchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//			},
+//			matchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "different"),
+//			},
+//			seriesSet: storage.NoopSeriesSet(),
+//		},
+//		{
+//			requiredMatchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//			},
+//			matchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
+//			},
+//			seriesSet: mockSeriesSet{},
+//		},
+//		{
+//			requiredMatchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
+//			},
+//			matchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//				labels.MustNewMatcher(labels.MatchEqual, "foo", "baz"),
+//			},
+//			seriesSet: storage.NoopSeriesSet(),
+//		},
+//		{
+//			requiredMatchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
+//			},
+//			matchers: []*labels.Matcher{
+//				labels.MustNewMatcher(labels.MatchEqual, "special", "label"),
+//				labels.MustNewMatcher(labels.MatchEqual, "foo", "bar"),
+//			},
+//			seriesSet: mockSeriesSet{},
+//		},
+//	}
+//
+//	for i, test := range tests {
+//		q := &requiredMatchersQuerier{
+//			Querier:          mockQuerier{},
+//			requiredMatchers: test.requiredMatchers,
+//		}
+//
+//		have, _, err := q.Select(false, nil, test.matchers...)
+//		if err != nil {
+//			t.Error(err)
+//		}
+//		if want := test.seriesSet; want != have {
+//			t.Errorf("%d. expected series set %+v, got %+v", i, want, have)
+//		}
+//		if want, have := test.requiredMatchers, q.requiredMatchers; !reflect.DeepEqual(want, have) {
+//			t.Errorf("%d. requiredMatchersQuerier.Select() has modified the matchers", i)
+//		}
+//	}
+//}
