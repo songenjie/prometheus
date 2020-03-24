@@ -27,6 +27,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/version"
@@ -38,30 +39,71 @@ const maxErrMsgLen = 256
 
 var userAgent = fmt.Sprintf("Prometheus/%s", version.Version)
 
-// Client allows reading and writing from/to a remote HTTP endpoint.
-type Client struct {
+// client allows reading and writing from/to a remote HTTP endpoint.
+type client struct {
 	remoteName string // Used to differentiate clients in metrics.
 	url        *config_util.URL
 	client     *http.Client
 	timeout    time.Duration
+
+	readQueries prometheus.Gauge
 }
 
-// ClientConfig configures a Client.
+// ClientConfig configures a client.
 type ClientConfig struct {
 	URL              *config_util.URL
 	Timeout          model.Duration
 	HTTPClientConfig config_util.HTTPClientConfig
 }
 
-// NewClient creates a new Client.
-func NewClient(remoteName string, conf *ClientConfig) (*Client, error) {
+// TODO(bwplotka): Add streamed chunked remote read (add issue link).
+type ReadClient interface {
+	Read(ctx context.Context, query *prompb.Query) (*prompb.QueryResult, error)
+}
+
+// NewReadClient creates a new client for remote read.
+// Caller has to ensure there are no duplicated clients.
+func NewReadClient(reg prometheus.Registerer, name string, conf *ClientConfig) (ReadClient, error) {
 	httpClient, err := config_util.NewClientFromConfig(conf.HTTPClientConfig, "remote_storage", false)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{
-		remoteName: remoteName,
+	readQueries := prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "remote_read_queries",
+			Help:      "The number of in-flight remote read queries.",
+			ConstLabels: prometheus.Labels{
+				remoteName: name,
+				endpoint:   conf.URL.String(),
+			},
+		},
+	)
+	if reg != nil {
+		reg.Unregister(readQueries)
+		reg.MustRegister(readQueries)
+	}
+
+	return &client{
+		remoteName:  name,
+		url:         conf.URL,
+		client:      httpClient,
+		timeout:     time.Duration(conf.Timeout),
+		readQueries: readQueries,
+	}, nil
+}
+
+// NewStorageClient creates a new client for remote write.
+func NewStorageClient(name string, conf *ClientConfig) (StorageClient, error) {
+	httpClient, err := config_util.NewClientFromConfig(conf.HTTPClientConfig, "remote_storage", false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &client{
+		remoteName: name,
 		url:        conf.URL,
 		client:     httpClient,
 		timeout:    time.Duration(conf.Timeout),
@@ -74,7 +116,7 @@ type recoverableError struct {
 
 // Store sends a batch of samples to the HTTP endpoint, the request is the proto marshalled
 // and encoded bytes from codec.go.
-func (c *Client) Store(ctx context.Context, req []byte) error {
+func (c *client) Store(ctx context.Context, req []byte) error {
 	httpReq, err := http.NewRequest("POST", c.url.String(), bytes.NewReader(req))
 	if err != nil {
 		// Errors from NewRequest are from unparsable URLs, so are not
@@ -115,17 +157,20 @@ func (c *Client) Store(ctx context.Context, req []byte) error {
 }
 
 // Name uniquely identifies the client.
-func (c Client) Name() string {
+func (c client) Name() string {
 	return c.remoteName
 }
 
 // Endpoint is the remote read or write endpoint.
-func (c Client) Endpoint() string {
+func (c client) Endpoint() string {
 	return c.url.String()
 }
 
 // Read reads from a remote endpoint.
-func (c *Client) Read(ctx context.Context, query *prompb.Query) (*prompb.QueryResult, error) {
+func (c *client) Read(ctx context.Context, query *prompb.Query) (*prompb.QueryResult, error) {
+	c.readQueries.Inc()
+	defer c.readQueries.Dec()
+
 	req := &prompb.ReadRequest{
 		// TODO: Support batching multiple queries into one read request,
 		// as the protobuf interface allows for it.

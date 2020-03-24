@@ -510,7 +510,7 @@ func (ng *Engine) execEvalStmt(ctx context.Context, query *query, s *parser.Eval
 	}
 	defer querier.Close()
 
-	warnings, err := ng.populateSeries(ctxPrepare, querier, s)
+	warnings, err := ng.populateSeries(querier, s)
 	prepareSpanTimer.Finish()
 
 	if err != nil {
@@ -642,7 +642,7 @@ func (ng *Engine) findMinTime(s *parser.EvalStmt) time.Time {
 	return s.Start.Add(-maxOffset)
 }
 
-func (ng *Engine) populateSeries(ctx context.Context, querier storage.Querier, s *parser.EvalStmt) (storage.Warnings, error) {
+func (ng *Engine) populateSeries(querier storage.Querier, s *parser.EvalStmt) (storage.Warnings, error) {
 	var (
 		// Whenever a MatrixSelector is evaluated, evalRange is set to the corresponding range.
 		// The evaluation of the VectorSelector inside then evaluates the given range and unsets

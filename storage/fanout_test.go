@@ -195,7 +195,7 @@ func TestMergeQuerierWithChainMerger(t *testing.T) {
 			}
 			qs = append(qs, tc.extraQueriers...)
 
-			merged, _, _ := NewMergeQuerier(qs[0], qs, ChainedSeriesMerge).Select(false, nil)
+			merged, _, _ := NewMergeQuerier(qs, 0, ChainingSeriesMerge).Select(false, nil)
 			for merged.Next() {
 				testutil.Assert(t, tc.expected.Next(), "Expected Next() to be true")
 				actualSeries := merged.At()
@@ -346,7 +346,7 @@ func TestMergeChunkQuerierWithNoVerticalChunkSeriesMerger(t *testing.T) {
 			}
 			qs = append(qs, tc.extraQueriers...)
 
-			merged, _, _ := NewMergeChunkQuerier(qs[0], qs, NewVerticalChunkSeriesMerger(nil)).Select(false, nil)
+			merged, _, _ := NewMergeChunkQuerier(qs, 0, NewCompactingChunkSeriesMerger(nil)).Select(false, nil)
 			for merged.Next() {
 				testutil.Assert(t, tc.expected.Next(), "Expected Next() to be true")
 				actualSeries := merged.At()
@@ -366,7 +366,7 @@ func TestMergeChunkQuerierWithNoVerticalChunkSeriesMerger(t *testing.T) {
 }
 
 type mockQuerier struct {
-	baseQuerier
+	LabelQuerier
 
 	toReturn []Series
 }
@@ -388,7 +388,7 @@ func (m *mockQuerier) Select(sortSeries bool, _ *SelectHints, _ ...*labels.Match
 }
 
 type mockChunkQurier struct {
-	baseQuerier
+	LabelQuerier
 
 	toReturn []ChunkSeries
 }
@@ -460,22 +460,22 @@ func TestChainSampleIterator(t *testing.T) {
 	}{
 		{
 			input: []chunkenc.Iterator{
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{1, 1}}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{1, 1}}),
 			},
 			expected: []tsdbutil.Sample{sample{0, 0}, sample{1, 1}},
 		},
 		{
 			input: []chunkenc.Iterator{
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{1, 1}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{2, 2}, sample{3, 3}}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{1, 1}}),
+				NewListSeriesIterator(samples{sample{2, 2}, sample{3, 3}}),
 			},
 			expected: []tsdbutil.Sample{sample{0, 0}, sample{1, 1}, sample{2, 2}, sample{3, 3}},
 		},
 		{
 			input: []chunkenc.Iterator{
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{3, 3}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{1, 1}, sample{4, 4}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{2, 2}, sample{5, 5}}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{3, 3}}),
+				NewListSeriesIterator(samples{sample{1, 1}, sample{4, 4}}),
+				NewListSeriesIterator(samples{sample{2, 2}, sample{5, 5}}),
 			},
 			expected: []tsdbutil.Sample{
 				sample{0, 0}, sample{1, 1}, sample{2, 2}, sample{3, 3}, sample{4, 4}, sample{5, 5}},
@@ -483,12 +483,12 @@ func TestChainSampleIterator(t *testing.T) {
 		// Overlap.
 		{
 			input: []chunkenc.Iterator{
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{1, 1}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{2, 2}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{2, 2}, sample{3, 3}}),
-				NewListSeriesIterator([]tsdbutil.Sample{}),
-				NewListSeriesIterator([]tsdbutil.Sample{}),
-				NewListSeriesIterator([]tsdbutil.Sample{}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{1, 1}}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{2, 2}}),
+				NewListSeriesIterator(samples{sample{2, 2}, sample{3, 3}}),
+				NewListSeriesIterator(samples{}),
+				NewListSeriesIterator(samples{}),
+				NewListSeriesIterator(samples{}),
 			},
 			expected: []tsdbutil.Sample{sample{0, 0}, sample{1, 1}, sample{2, 2}, sample{3, 3}},
 		},
@@ -508,24 +508,24 @@ func TestChainSampleIteratorSeek(t *testing.T) {
 	}{
 		{
 			input: []chunkenc.Iterator{
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{1, 1}, sample{2, 2}}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{1, 1}, sample{2, 2}}),
 			},
 			seek:     1,
 			expected: []tsdbutil.Sample{sample{1, 1}, sample{2, 2}},
 		},
 		{
 			input: []chunkenc.Iterator{
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{1, 1}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{2, 2}, sample{3, 3}}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{1, 1}}),
+				NewListSeriesIterator(samples{sample{2, 2}, sample{3, 3}}),
 			},
 			seek:     2,
 			expected: []tsdbutil.Sample{sample{2, 2}, sample{3, 3}},
 		},
 		{
 			input: []chunkenc.Iterator{
-				NewListSeriesIterator([]tsdbutil.Sample{sample{0, 0}, sample{3, 3}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{1, 1}, sample{4, 4}}),
-				NewListSeriesIterator([]tsdbutil.Sample{sample{2, 2}, sample{5, 5}}),
+				NewListSeriesIterator(samples{sample{0, 0}, sample{3, 3}}),
+				NewListSeriesIterator(samples{sample{1, 1}, sample{4, 4}}),
+				NewListSeriesIterator(samples{sample{2, 2}, sample{5, 5}}),
 			},
 			seek:     2,
 			expected: []tsdbutil.Sample{sample{2, 2}, sample{3, 3}, sample{4, 4}, sample{5, 5}},
@@ -564,7 +564,7 @@ func makeMergeSeriesSet(numSeriesSets, numSeries, numSamples int) SeriesSet {
 	for i := 0; i < numSeriesSets; i++ {
 		seriesSets = append(seriesSets, &genericSeriesSetAdapter{makeSeriesSet(numSeries, numSamples)})
 	}
-	return &seriesSetAdapter{newGenericMergeSeriesSet(seriesSets, nil, (&seriesMergerAdapter{VerticalSeriesMergeFunc: ChainedSeriesMerge}).Merge)}
+	return &seriesSetAdapter{newGenericMergeSeriesSet(seriesSets, nil, (&seriesMergerAdapter{VerticalSeriesMergeFunc: ChainingSeriesMerge}).Merge)}
 }
 
 func benchmarkDrain(seriesSet SeriesSet, b *testing.B) {
@@ -596,3 +596,502 @@ func BenchmarkMergeSeriesSet(b *testing.B) {
 		})
 	}
 }
+
+// TODO: Incorporate this test from db_test.go to test our ChainSeriesMerge with those test cases.
+//
+//func TestVerticalCompaction(t *testing.T) {
+//	cases := []struct {
+//		blockSeries          [][]storage.Series
+//		expSeries            map[string][]tsdbutil.Sample
+//		expBlockNum          int
+//		expOverlappingBlocks int
+//	}{
+//		// Case 0
+//		// |--------------|
+//		//        |----------------|
+//		{
+//			blockSeries: [][]storage.Series{
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{7, 0}, sample{8, 0}, sample{9, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//						sample{8, 99}, sample{9, 99}, sample{10, 99}, sample{11, 99},
+//						sample{12, 99}, sample{13, 99}, sample{14, 99},
+//					}),
+//				},
+//			},
+//			expSeries: map[string][]tsdbutil.Sample{`{a="b"}`: {
+//				sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{3, 99},
+//				sample{4, 0}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//				sample{8, 99}, sample{9, 99}, sample{10, 99}, sample{11, 99},
+//				sample{12, 99}, sample{13, 99}, sample{14, 99},
+//			}},
+//			expBlockNum:          1,
+//			expOverlappingBlocks: 1,
+//		},
+//		// Case 1
+//		// |-------------------------------|
+//		//        |----------------|
+//		{
+//			blockSeries: [][]storage.Series{
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{7, 0}, sample{8, 0}, sample{9, 0},
+//						sample{11, 0}, sample{13, 0}, sample{17, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//						sample{8, 99}, sample{9, 99}, sample{10, 99},
+//					}),
+//				},
+//			},
+//			expSeries: map[string][]tsdbutil.Sample{`{a="b"}`: {
+//				sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{3, 99},
+//				sample{4, 0}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//				sample{8, 99}, sample{9, 99}, sample{10, 99}, sample{11, 0},
+//				sample{13, 0}, sample{17, 0},
+//			}},
+//			expBlockNum:          1,
+//			expOverlappingBlocks: 1,
+//		},
+//		// Case 2
+//		// |-------------------------------|
+//		//        |------------|
+//		//                           |--------------------|
+//		{
+//			blockSeries: [][]storage.Series{
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{7, 0}, sample{8, 0}, sample{9, 0},
+//						sample{11, 0}, sample{13, 0}, sample{17, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//						sample{8, 99}, sample{9, 99},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{14, 59}, sample{15, 59}, sample{17, 59}, sample{20, 59},
+//						sample{21, 59}, sample{22, 59},
+//					}),
+//				},
+//			},
+//			expSeries: map[string][]tsdbutil.Sample{`{a="b"}`: {
+//				sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{3, 99},
+//				sample{4, 0}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//				sample{8, 99}, sample{9, 99}, sample{11, 0}, sample{13, 0},
+//				sample{14, 59}, sample{15, 59}, sample{17, 59}, sample{20, 59},
+//				sample{21, 59}, sample{22, 59},
+//			}},
+//			expBlockNum:          1,
+//			expOverlappingBlocks: 1,
+//		},
+//		// Case 3
+//		// |-------------------|
+//		//                           |--------------------|
+//		//               |----------------|
+//		{
+//			blockSeries: [][]storage.Series{
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{8, 0}, sample{9, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{14, 59}, sample{15, 59}, sample{17, 59}, sample{20, 59},
+//						sample{21, 59}, sample{22, 59},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{5, 99}, sample{6, 99}, sample{7, 99}, sample{8, 99},
+//						sample{9, 99}, sample{10, 99}, sample{13, 99}, sample{15, 99},
+//						sample{16, 99}, sample{17, 99},
+//					}),
+//				},
+//			},
+//			expSeries: map[string][]tsdbutil.Sample{`{a="b"}`: {
+//				sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//				sample{5, 99}, sample{6, 99}, sample{7, 99}, sample{8, 99},
+//				sample{9, 99}, sample{10, 99}, sample{13, 99}, sample{14, 59},
+//				sample{15, 59}, sample{16, 99}, sample{17, 59}, sample{20, 59},
+//				sample{21, 59}, sample{22, 59},
+//			}},
+//			expBlockNum:          1,
+//			expOverlappingBlocks: 1,
+//		},
+//		// Case 4
+//		// |-------------------------------------|
+//		//            |------------|
+//		//      |-------------------------|
+//		{
+//			blockSeries: [][]storage.Series{
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{8, 0}, sample{9, 0}, sample{10, 0},
+//						sample{13, 0}, sample{15, 0}, sample{16, 0}, sample{17, 0},
+//						sample{20, 0}, sample{22, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{7, 59}, sample{8, 59}, sample{9, 59}, sample{10, 59},
+//						sample{11, 59},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{8, 99},
+//						sample{9, 99}, sample{10, 99}, sample{13, 99}, sample{15, 99},
+//						sample{16, 99}, sample{17, 99},
+//					}),
+//				},
+//			},
+//			expSeries: map[string][]tsdbutil.Sample{`{a="b"}`: {
+//				sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{3, 99},
+//				sample{4, 0}, sample{5, 99}, sample{6, 99}, sample{7, 59},
+//				sample{8, 59}, sample{9, 59}, sample{10, 59}, sample{11, 59},
+//				sample{13, 99}, sample{15, 99}, sample{16, 99}, sample{17, 99},
+//				sample{20, 0}, sample{22, 0},
+//			}},
+//			expBlockNum:          1,
+//			expOverlappingBlocks: 1,
+//		},
+//		// Case 5: series are merged properly when there are multiple series.
+//		// |-------------------------------------|
+//		//            |------------|
+//		//      |-------------------------|
+//		{
+//			blockSeries: [][]storage.Series{
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{8, 0}, sample{9, 0}, sample{10, 0},
+//						sample{13, 0}, sample{15, 0}, sample{16, 0}, sample{17, 0},
+//						sample{20, 0}, sample{22, 0},
+//					}),
+//					newSeries(map[string]string{"b": "c"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{8, 0}, sample{9, 0}, sample{10, 0},
+//						sample{13, 0}, sample{15, 0}, sample{16, 0}, sample{17, 0},
+//						sample{20, 0}, sample{22, 0},
+//					}),
+//					newSeries(map[string]string{"c": "d"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{8, 0}, sample{9, 0}, sample{10, 0},
+//						sample{13, 0}, sample{15, 0}, sample{16, 0}, sample{17, 0},
+//						sample{20, 0}, sample{22, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"__name__": "a"}, []tsdbutil.Sample{
+//						sample{7, 59}, sample{8, 59}, sample{9, 59}, sample{10, 59},
+//						sample{11, 59},
+//					}),
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{7, 59}, sample{8, 59}, sample{9, 59}, sample{10, 59},
+//						sample{11, 59},
+//					}),
+//					newSeries(map[string]string{"aa": "bb"}, []tsdbutil.Sample{
+//						sample{7, 59}, sample{8, 59}, sample{9, 59}, sample{10, 59},
+//						sample{11, 59},
+//					}),
+//					newSeries(map[string]string{"c": "d"}, []tsdbutil.Sample{
+//						sample{7, 59}, sample{8, 59}, sample{9, 59}, sample{10, 59},
+//						sample{11, 59},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{8, 99},
+//						sample{9, 99}, sample{10, 99}, sample{13, 99}, sample{15, 99},
+//						sample{16, 99}, sample{17, 99},
+//					}),
+//					newSeries(map[string]string{"aa": "bb"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{8, 99},
+//						sample{9, 99}, sample{10, 99}, sample{13, 99}, sample{15, 99},
+//						sample{16, 99}, sample{17, 99},
+//					}),
+//					newSeries(map[string]string{"c": "d"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{8, 99},
+//						sample{9, 99}, sample{10, 99}, sample{13, 99}, sample{15, 99},
+//						sample{16, 99}, sample{17, 99},
+//					}),
+//				},
+//			},
+//			expSeries: map[string][]tsdbutil.Sample{
+//				`{__name__="a"}`: {
+//					sample{7, 59}, sample{8, 59}, sample{9, 59}, sample{10, 59},
+//					sample{11, 59},
+//				},
+//				`{a="b"}`: {
+//					sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{3, 99},
+//					sample{4, 0}, sample{5, 99}, sample{6, 99}, sample{7, 59},
+//					sample{8, 59}, sample{9, 59}, sample{10, 59}, sample{11, 59},
+//					sample{13, 99}, sample{15, 99}, sample{16, 99}, sample{17, 99},
+//					sample{20, 0}, sample{22, 0},
+//				},
+//				`{aa="bb"}`: {
+//					sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{7, 59},
+//					sample{8, 59}, sample{9, 59}, sample{10, 59}, sample{11, 59},
+//					sample{13, 99}, sample{15, 99}, sample{16, 99}, sample{17, 99},
+//				},
+//				`{b="c"}`: {
+//					sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//					sample{5, 0}, sample{8, 0}, sample{9, 0}, sample{10, 0},
+//					sample{13, 0}, sample{15, 0}, sample{16, 0}, sample{17, 0},
+//					sample{20, 0}, sample{22, 0},
+//				},
+//				`{c="d"}`: {
+//					sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{3, 99},
+//					sample{4, 0}, sample{5, 99}, sample{6, 99}, sample{7, 59},
+//					sample{8, 59}, sample{9, 59}, sample{10, 59}, sample{11, 59},
+//					sample{13, 99}, sample{15, 99}, sample{16, 99}, sample{17, 99},
+//					sample{20, 0}, sample{22, 0},
+//				},
+//			},
+//			expBlockNum:          1,
+//			expOverlappingBlocks: 1,
+//		},
+//		// Case 6
+//		// |--------------|
+//		//        |----------------|
+//		//                                         |--------------|
+//		//                                                  |----------------|
+//		{
+//			blockSeries: [][]storage.Series{
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{4, 0},
+//						sample{5, 0}, sample{7, 0}, sample{8, 0}, sample{9, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{3, 99}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//						sample{8, 99}, sample{9, 99}, sample{10, 99}, sample{11, 99},
+//						sample{12, 99}, sample{13, 99}, sample{14, 99},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{20, 0}, sample{21, 0}, sample{22, 0}, sample{24, 0},
+//						sample{25, 0}, sample{27, 0}, sample{28, 0}, sample{29, 0},
+//					}),
+//				},
+//				{
+//					newSeries(map[string]string{"a": "b"}, []tsdbutil.Sample{
+//						sample{23, 99}, sample{25, 99}, sample{26, 99}, sample{27, 99},
+//						sample{28, 99}, sample{29, 99}, sample{30, 99}, sample{31, 99},
+//					}),
+//				},
+//			},
+//			expSeries: map[string][]tsdbutil.Sample{`{a="b"}`: {
+//				sample{0, 0}, sample{1, 0}, sample{2, 0}, sample{3, 99},
+//				sample{4, 0}, sample{5, 99}, sample{6, 99}, sample{7, 99},
+//				sample{8, 99}, sample{9, 99}, sample{10, 99}, sample{11, 99},
+//				sample{12, 99}, sample{13, 99}, sample{14, 99},
+//				sample{20, 0}, sample{21, 0}, sample{22, 0}, sample{23, 99},
+//				sample{24, 0}, sample{25, 99}, sample{26, 99}, sample{27, 99},
+//				sample{28, 99}, sample{29, 99}, sample{30, 99}, sample{31, 99},
+//			}},
+//			expBlockNum:          2,
+//			expOverlappingBlocks: 2,
+//		},
+//	}
+//
+//	defaultMatcher := labels.MustNewMatcher(labels.MatchRegexp, "__name__", ".*")
+//	for _, c := range cases {
+//		if ok := t.Run("", func(t *testing.T) {
+//
+//			tmpdir, err := ioutil.TempDir("", "data")
+//			testutil.Ok(t, err)
+//			defer func() {
+//				testutil.Ok(t, os.RemoveAll(tmpdir))
+//			}()
+//
+//			for _, series := range c.blockSeries {
+//				createBlock(t, tmpdir, series)
+//			}
+//			opts := DefaultOptions()
+//			opts.AllowOverlappingBlocks = true
+//			db, err := Open(tmpdir, nil, nil, opts)
+//			testutil.Ok(t, err)
+//			defer func() {
+//				testutil.Ok(t, db.Close())
+//			}()
+//			db.DisableCompactions()
+//			testutil.Assert(t, len(db.blocks) == len(c.blockSeries), "Wrong number of blocks [before compact].")
+//
+//			// Vertical Query Merging test.
+//			querier, err := db.Querier(context.TODO(), 0, 100)
+//			testutil.Ok(t, err)
+//			actSeries := query(t, querier, defaultMatcher)
+//			testutil.Equals(t, c.expSeries, actSeries)
+//
+//			// Vertical compaction.
+//			lc := db.compactor.(*LeveledCompactor)
+//			testutil.Equals(t, 0, int(prom_testutil.ToFloat64(lc.metrics.overlappingBlocks)), "overlapping blocks count should be still 0 here")
+//			err = db.Compact()
+//			testutil.Ok(t, err)
+//			testutil.Equals(t, c.expBlockNum, len(db.Blocks()), "Wrong number of blocks [after compact]")
+//
+//			testutil.Equals(t, c.expOverlappingBlocks, int(prom_testutil.ToFloat64(lc.metrics.overlappingBlocks)), "overlapping blocks count mismatch")
+//
+//			// Query test after merging the overlapping blocks.
+//			querier, err = db.Querier(context.TODO(), 0, 100)
+//			testutil.Ok(t, err)
+//			actSeries = query(t, querier, defaultMatcher)
+//			testutil.Equals(t, c.expSeries, actSeries)
+//		}); !ok {
+//			return
+//		}
+//	}
+//}
+//
+// TODO: And those tests from querier_test
+//
+//func TestMergedSeriesSet(t *testing.T) {
+//	cases := []struct {
+//		// The input sets in order (samples in series in b are strictly
+//		// after those in a).
+//		a, b storage.SeriesSet
+//		// The composition of a and b in the partition series set must yield
+//		// results equivalent to the result series set.
+//		exp storage.SeriesSet
+//	}{
+//		{
+//			a: newMockSeriesSet([]storage.Series{
+//				newListSeries(
+//					labels.Labels{{"a", "a"}},
+//					[]tsdbutil.Sample{
+//						sample{t: 1, v: 1},
+//					}),
+//			}),
+//			b: newMockSeriesSet([]storage.Series{
+//				newListSeries(
+//					labels.Labels{{"a", "a"}},
+//					[]tsdbutil.Sample{
+//						sample{t: 2, v: 2},
+//					}),
+//				newListSeries(
+//					labels.Labels{{"b", "b"}},
+//					[]tsdbutil.Sample{
+//						sample{t: 1, v: 1},
+//					}),
+//			}),
+//			exp: newMockSeriesSet([]storage.Series{
+//				newListSeries(
+//					labels.Labels{{"a", "a"}},
+//					[]tsdbutil.Sample{
+//						sample{t: 1, v: 1},
+//						sample{t: 2, v: 2},
+//					}),
+//				newListSeries(
+//					labels.Labels{{"b", "b"}},
+//					[]tsdbutil.Sample{
+//						sample{t: 1, v: 1},
+//					}),
+//			}),
+//		},
+//		{
+//			a: newMockSeriesSet([]storage.Series{
+//				newListSeries(
+//					labels.Labels{
+//						{"handler", "prometheus"},
+//						{"instance", "127.0.0.1:9090"},
+//					}, []tsdbutil.Sample{
+//						sample{t: 1, v: 1},
+//					}),
+//				newListSeries(
+//					labels.Labels{
+//						{"handler", "prometheus"},
+//						{"instance", "localhost:9090"},
+//					}, []tsdbutil.Sample{
+//						sample{t: 1, v: 2},
+//					}),
+//			}),
+//			b: newMockSeriesSet([]storage.Series{
+//				newListSeries(
+//					labels.Labels{
+//						{"handler", "prometheus"},
+//						{"instance", "127.0.0.1:9090"},
+//					}, []tsdbutil.Sample{
+//						sample{t: 2, v: 1},
+//					}),
+//				newListSeries(
+//					labels.Labels{
+//						{"handler", "query"},
+//						{"instance", "localhost:9090"},
+//					}, []tsdbutil.Sample{
+//						sample{t: 2, v: 2},
+//					}),
+//			}),
+//			exp: newMockSeriesSet([]storage.Series{
+//				newListSeries(
+//					labels.Labels{
+//						{"handler", "prometheus"},
+//						{"instance", "127.0.0.1:9090"},
+//					}, []tsdbutil.Sample{
+//						sample{t: 1, v: 1},
+//						sample{t: 2, v: 1},
+//					}),
+//				newListSeries(
+//					labels.Labels{
+//						{"handler", "prometheus"},
+//						{"instance", "localhost:9090"},
+//					}, []tsdbutil.Sample{
+//						sample{t: 1, v: 2},
+//					}),
+//				newListSeries(
+//					labels.Labels{
+//						{"handler", "query"},
+//						{"instance", "localhost:9090"},
+//					}, []tsdbutil.Sample{
+//						sample{t: 2, v: 2},
+//					}),
+//			}),
+//		},
+//	}
+//
+//Outer:
+//	for _, c := range cases {
+//		res := NewMergedSeriesSet([]storage.SeriesSet{c.a, c.b})
+//
+//		for {
+//			eok, rok := c.exp.Next(), res.Next()
+//			testutil.Equals(t, eok, rok)
+//
+//			if !eok {
+//				continue Outer
+//			}
+//			sexp := c.exp.At()
+//			sres := res.At()
+//
+//			testutil.Equals(t, sexp.Labels(), sres.Labels())
+//
+//			smplExp, errExp := expandSeriesIterator(sexp.Iterator())
+//			smplRes, errRes := expandSeriesIterator(sres.Iterator())
+//
+//			testutil.Equals(t, errExp, errRes)
+//			testutil.Equals(t, smplExp, smplRes)
+//		}
+//	}
+//}
+
+//

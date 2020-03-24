@@ -39,6 +39,7 @@ import (
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	tsdb_errors "github.com/prometheus/prometheus/tsdb/errors"
 	"github.com/prometheus/prometheus/tsdb/fileutil"
+
 	// Load the package into main to make sure minium Go version is met.
 	_ "github.com/prometheus/prometheus/tsdb/goversion"
 	"github.com/prometheus/prometheus/tsdb/wal"
@@ -410,6 +411,11 @@ func (db *DBReadOnly) Querier(ctx context.Context, mint, maxt int64) (storage.Qu
 	}
 
 	return dbWritable.Querier(ctx, mint, maxt)
+}
+
+func (db *DBReadOnly) ChunkQuerier(context.Context, int64, int64) (storage.ChunkQuerier, error) {
+	// TODO(bwplotka): Implement in next PR.
+	return nil, errors.New("not implemented")
 }
 
 // Blocks returns a slice of block readers for persisted blocks.
@@ -1322,6 +1328,11 @@ func (db *DB) Querier(_ context.Context, mint, maxt int64) (storage.Querier, err
 	return &querier{
 		blocks: blockQueriers,
 	}, nil
+}
+
+func (db *DB) ChunkQuerier(context.Context, int64, int64) (storage.ChunkQuerier, error) {
+	// TODO(bwplotka): Implement in next PR.
+	return nil, errors.New("not implemented")
 }
 
 func rangeForTimestamp(t int64, width int64) (maxt int64) {

@@ -72,31 +72,63 @@ func TestSelectSorted(t *testing.T) {
 
 	fanoutStorage := storage.NewFanout(nil, priStorage, remoteStorage1, remoteStorage2)
 
-	querier, err := fanoutStorage.Querier(context.Background(), 0, 8000)
-	testutil.Ok(t, err)
-	defer querier.Close()
+	t.Run("querier", func(t *testing.T) {
+		querier, err := fanoutStorage.Querier(context.Background(), 0, 8000)
+		testutil.Ok(t, err)
+		defer querier.Close()
 
-	matcher, err := labels.NewMatcher(labels.MatchEqual, model.MetricNameLabel, "a")
-	testutil.Ok(t, err)
+		matcher, err := labels.NewMatcher(labels.MatchEqual, model.MetricNameLabel, "a")
+		testutil.Ok(t, err)
 
-	seriesSet, _, err := querier.Select(true, nil, matcher)
-	testutil.Ok(t, err)
+		seriesSet, _, err := querier.Select(true, nil, matcher)
+		testutil.Ok(t, err)
 
-	result := make(map[int64]float64)
-	var labelsResult labels.Labels
-	for seriesSet.Next() {
-		series := seriesSet.At()
-		seriesLabels := series.Labels()
-		labelsResult = seriesLabels
-		iterator := series.Iterator()
-		for iterator.Next() {
-			timestamp, value := iterator.At()
-			result[timestamp] = value
+		result := make(map[int64]float64)
+		var labelsResult labels.Labels
+		for seriesSet.Next() {
+			series := seriesSet.At()
+			seriesLabels := series.Labels()
+			labelsResult = seriesLabels
+			iterator := series.Iterator()
+			for iterator.Next() {
+				timestamp, value := iterator.At()
+				result[timestamp] = value
+			}
 		}
-	}
 
-	testutil.Equals(t, labelsResult, outputLabel)
-	testutil.Equals(t, inputTotalSize, len(result))
+		testutil.Equals(t, labelsResult, outputLabel)
+		testutil.Equals(t, inputTotalSize, len(result))
+	})
+	t.Run("chunk querier", func(t *testing.T) {
+		t.Skip("TODO(bwplotka: Unskip when db will implement ChunkQuerier.")
+		querier, err := fanoutStorage.ChunkQuerier(context.Background(), 0, 8000)
+		testutil.Ok(t, err)
+		defer querier.Close()
+
+		matcher, err := labels.NewMatcher(labels.MatchEqual, model.MetricNameLabel, "a")
+		testutil.Ok(t, err)
+
+		chkSeriesSet, _, err := querier.Select(true, nil, matcher)
+		testutil.Ok(t, err)
+
+		seriesSet := storage.NewSeriesSetFromChunkSeriesSet(chkSeriesSet)
+
+		result := make(map[int64]float64)
+		var labelsResult labels.Labels
+		for seriesSet.Next() {
+			series := seriesSet.At()
+			seriesLabels := series.Labels()
+			labelsResult = seriesLabels
+			iterator := series.Iterator()
+			for iterator.Next() {
+				timestamp, value := iterator.At()
+				result[timestamp] = value
+			}
+		}
+
+		testutil.Equals(t, labelsResult, outputLabel)
+		testutil.Equals(t, inputTotalSize, len(result))
+	})
 }
 
 func TestFanoutErrors(t *testing.T) {
@@ -154,18 +186,12 @@ type errStorage struct{}
 func (errStorage) Querier(_ context.Context, _, _ int64) (storage.Querier, error) {
 	return errQuerier{}, nil
 }
-
-func (errStorage) Appender() storage.Appender {
-	return nil
+func (errStorage) ChunkQuerier(_ context.Context, _, _ int64) (storage.ChunkQuerier, error) {
+	return errChunkQuerier{}, nil
 }
-
-func (errStorage) StartTime() (int64, error) {
-	return 0, nil
-}
-
-func (errStorage) Close() error {
-	return nil
-}
+func (errStorage) Appender() storage.Appender { return nil }
+func (errStorage) StartTime() (int64, error)  { return 0, nil }
+func (errStorage) Close() error               { return nil }
 
 type errQuerier struct{}
 
@@ -181,6 +207,10 @@ func (errQuerier) LabelNames() ([]string, storage.Warnings, error) {
 	return nil, nil, errors.New("label names error")
 }
 
-func (errQuerier) Close() error {
-	return nil
+func (errQuerier) Close() error { return nil }
+
+type errChunkQuerier struct{ errQuerier }
+
+func (errChunkQuerier) Select(bool, *storage.SelectHints, ...*labels.Matcher) (storage.ChunkSeriesSet, storage.Warnings, error) {
+	return nil, nil, errSelect
 }

@@ -71,7 +71,7 @@ func TestStoreHTTPErrorHandling(t *testing.T) {
 
 		hash, err := toHash(conf)
 		testutil.Ok(t, err)
-		c, err := NewClient(hash, conf)
+		c, err := NewStorageClient(hash, conf)
 		testutil.Ok(t, err)
 
 		err = c.Store(context.Background(), []byte{})
