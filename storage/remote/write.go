@@ -33,7 +33,7 @@ var (
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "samples_in_total",
-		Help:      "Samples in to remote storage, compare to samples out for queue managers.",
+		Help:      "samples in to remote storage, compare to samples out for queue managers.",
 	})
 	highestTimestamp = maxGauge{
 		Gauge: promauto.NewGauge(prometheus.GaugeOpts{

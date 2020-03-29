@@ -1243,8 +1243,7 @@ func (api *API) remoteReadStreamedXORChunks(ctx context.Context, w http.Response
 				return err
 			}
 
-			// TODO(bwplotka): Use ChunkQuerier once ready in tsdb package.
-			querier, err := api.Queryable.Querier(ctx, query.StartTimestampMs, query.EndTimestampMs)
+			querier, err := api.Queryable.ChunkQuerier(ctx, query.StartTimestampMs, query.EndTimestampMs)
 			if err != nil {
 				return err
 			}
@@ -1272,7 +1271,7 @@ func (api *API) remoteReadStreamedXORChunks(ctx context.Context, w http.Response
 				return err
 			}
 
-			return remote.DeprecatedStreamChunkedReadResponses(
+			return remote.StreamChunkedReadResponses(
 				remote.NewChunkedWriter(w, f),
 				int64(i),
 				set,

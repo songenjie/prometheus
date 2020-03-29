@@ -560,7 +560,7 @@ func TestHeadDeleteSimple(t *testing.T) {
 					testutil.Ok(t, err)
 					testutil.Equals(t, 0, len(ws))
 					expSeriesSet := newMockSeriesSet([]storage.Series{
-						newSeries(map[string]string{lblDefault.Name: lblDefault.Value}, func() []tsdbutil.Sample {
+						newSeries(labels.Labels{lblDefault}, func() []tsdbutil.Sample {
 							ss := make([]tsdbutil.Sample, 0, len(c.smplsExp))
 							for _, s := range c.smplsExp {
 								ss = append(ss, s)
@@ -814,12 +814,9 @@ func TestDelete_e2e(t *testing.T) {
 				smpls = deletedSamples(smpls, del.drange)
 				// Only append those series for which samples exist as mockSeriesSet
 				// doesn't skip series with no samples.
-				// TODO: But sometimes SeriesSet returns an empty SeriesIterator
+				// TODO: But sometimes SeriesSet returns an empty chunkenc.Iterator
 				if len(smpls) > 0 {
-					matchedSeries = append(matchedSeries, newSeries(
-						m.Map(),
-						smpls,
-					))
+					matchedSeries = append(matchedSeries, newSeries(m, smpls))
 				}
 			}
 			expSs := newMockSeriesSet(matchedSeries)
@@ -1434,12 +1431,16 @@ func TestMemSeriesIsolation(t *testing.T) {
 		iso := hb.iso.State()
 		iso.maxAppendID = maxAppendID
 
-		querier := &blockQuerier{
-			mint:       0,
-			maxt:       10000,
-			index:      idx,
-			chunks:     hb.chunksRange(math.MinInt64, math.MaxInt64, iso),
-			tombstones: tombstones.NewMemTombstones(),
+		// Hm.. here direct block chunk querier might be required?
+		querier := blockQuerier{
+			ChunkQuerier: &blockChunkQuerier{
+				index:      idx,
+				chunks:     hb.chunksRange(math.MinInt64, math.MaxInt64, iso),
+				tombstones: tombstones.NewMemTombstones(),
+
+				mint: 0,
+				maxt: 10000,
+			},
 		}
 
 		testutil.Ok(t, err)
