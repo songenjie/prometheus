@@ -230,14 +230,10 @@ type mergeGenericQuerier struct {
 // In case of overlaps in the returned data by all queriers, mergeFunc will be used.
 func NewMergeQuerier(queriers []Querier, primaryQuerier int, mergeFunc VerticalSeriesMergeFunc) Querier {
 	filtered := make([]genericQuerier, 0, len(queriers))
-	for i, querier := range queriers {
+	for _, querier := range queriers {
 		if _, ok := querier.(noopQuerier); !ok && querier != nil {
 			filtered = append(filtered, newGenericQuerierFrom(querier))
 			continue
-		}
-		if i == primaryQuerier {
-			// Primary was filtered, no primary anymore.
-			primaryQuerier = -1
 		}
 	}
 
@@ -268,13 +264,9 @@ func NewMergeQuerier(queriers []Querier, primaryQuerier int, mergeFunc VerticalS
 // TODO(bwplotka): Currently merge will compact overlapping chunks with bigger chunk, without limit. Split it: https://github.com/prometheus/tsdb/issues/670
 func NewMergeChunkQuerier(queriers []ChunkQuerier, primaryQuerier int, mergeFunc VerticalChunkSeriesMergeFunc) ChunkQuerier {
 	filtered := make([]genericQuerier, 0, len(queriers))
-	for i, querier := range queriers {
+	for _, querier := range queriers {
 		if _, ok := querier.(noopChunkQuerier); !ok && querier != nil {
 			filtered = append(filtered, newGenericQuerierFromChunk(querier))
-		}
-		if i == primaryQuerier {
-			// Primary was filtered, no primary anymore.
-			primaryQuerier = -1
 		}
 	}
 
