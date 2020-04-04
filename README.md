@@ -1,3 +1,6 @@
+# my branch 
+[v2.10.0-chines-rule](https://github.com/songenjie/prometheus/tree/v2.10.0-chinese-label-and-auto-reload-rules)
+
 # Prometheus
 
 [![CircleCI](https://circleci.com/gh/prometheus/prometheus/tree/master.svg?style=shield)][circleci]
