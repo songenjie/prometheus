@@ -32,6 +32,7 @@ import (
 	"github.com/prometheus/tsdb/index"
 	"github.com/prometheus/tsdb/labels"
 	"github.com/prometheus/tsdb/wal"
+	//logto "log"
 )
 
 var (
@@ -477,6 +478,7 @@ func (h *Head) Init(minValidTime int64) error {
 	if err != nil && err != ErrNotFound {
 		return errors.Wrap(err, "find last checkpoint")
 	}
+	//logto.Println("1")
 	if err == nil {
 		sr, err := wal.NewSegmentsReader(dir)
 		if err != nil {
@@ -492,6 +494,7 @@ func (h *Head) Init(minValidTime int64) error {
 		startFrom++
 	}
 
+	//logto.Println("2")
 	// Backfill segments from the last checkpoint onwards
 	sr, err := wal.NewSegmentsRangeReader(wal.SegmentRange{Dir: h.wal.Dir(), First: startFrom, Last: -1})
 	if err != nil {
@@ -1589,11 +1592,20 @@ func (s *memSeries) appendable(t int64, v float64) error {
 	if t > c.maxTime {
 		return nil
 	}
-	if t < c.maxTime {
+
+	time.Now().Second()
+
+	//Bug fix Error on ingesting out-of-order samples
+	//if t < (c.maxTime-1800000) {
+	if t < (c.maxTime-30000) {
+		//logto.Println(time.Now().UnixNano()/1e6 ,t ,c.maxTime-1800000)
 		return ErrOutOfOrderSample
 	}
+	
 	// We are allowing exact duplicates as we can encounter them in valid cases
 	// like federation and erroring out at that time would be extremely noisy.
+	//if math.Float64bits(s.sampleBuf[3].v) != math.Float64bits(v) {
+	//if t == c.maxTime && math.Float64bits(s.sampleBuf[3].v) != math.Float64bits(v) {
 	if math.Float64bits(s.sampleBuf[3].v) != math.Float64bits(v) {
 		return ErrAmendSample
 	}

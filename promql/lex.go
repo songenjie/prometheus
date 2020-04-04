@@ -900,15 +900,16 @@ func isDigit(r rune) bool {
 
 // isAlpha reports whether r is an alphabetic or underscore.
 func isAlpha(r rune) bool {
-	return r == '_' || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z')
+	return r == '_' || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || unicode.Is(unicode.Han, r)
 }
 
 // isLabel reports whether the string can be used as label.
 func isLabel(s string) bool {
-	if len(s) == 0 || !isAlpha(rune(s[0])) {
+	sr := []rune(s)
+	if len(sr) == 0 || !isAlpha(sr[0]) {
 		return false
 	}
-	for _, c := range s[1:] {
+	for _, c := range sr[1:] {
 		if !isAlphaNumeric(c) {
 			return false
 		}

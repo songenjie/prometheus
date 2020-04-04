@@ -103,7 +103,6 @@ func (a *Alert) needsSending(ts time.Time, resendDelay time.Duration) bool {
 	if a.ResolvedAt.After(a.LastSentAt) {
 		return true
 	}
-
 	return a.LastSentAt.Add(resendDelay).Before(ts)
 }
 
@@ -298,9 +297,11 @@ const resolvedRetention = 15 * time.Minute
 func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, externalURL *url.URL) (promql.Vector, error) {
 	res, err := query(ctx, r.vector.String(), ts)
 	if err != nil {
-		r.SetHealth(HealthBad)
-		r.SetLastError(err)
-		return nil, err
+		if err.Error() != "this is a Resolved func" {
+			r.SetHealth(HealthBad)
+			r.SetLastError(err)
+			return nil, err
+		}
 	}
 
 	r.mtx.Lock()
@@ -309,77 +310,146 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 	// Create pending alerts for any new vector elements in the alert expression
 	// or update the expression value for existing elements.
 	resultFPs := map[uint64]struct{}{}
+	resultResolved := map[uint64]struct{}{}
 
 	var vec promql.Vector
-	for _, smpl := range res {
-		// Provide the alert information to the template.
-		l := make(map[string]string, len(smpl.Metric))
-		for _, lbl := range smpl.Metric {
-			l[lbl.Name] = lbl.Value
-		}
 
-		tmplData := template.AlertTemplateData(l, r.externalLabels, smpl.V)
-		// Inject some convenience variables that are easier to remember for users
-		// who are not used to Go's templating system.
-		defs := []string{
-			"{{$labels := .Labels}}",
-			"{{$externalLabels := .ExternalLabels}}",
-			"{{$value := .Value}}",
-		}
-
-		expand := func(text string) string {
-			tmpl := template.NewTemplateExpander(
-				ctx,
-				strings.Join(append(defs, text), ""),
-				"__alert_"+r.Name(),
-				tmplData,
-				model.Time(timestamp.FromTime(ts)),
-				template.QueryFunc(query),
-				externalURL,
-			)
-			result, err := tmpl.Expand()
-			if err != nil {
-				result = fmt.Sprintf("<error expanding template: %s>", err)
-				level.Warn(r.logger).Log("msg", "Expanding alert template failed", "err", err, "data", tmplData)
+	if err == nil {
+		for _, smpl := range res {
+			// Provide the alert information to the template.
+			l := make(map[string]string, len(smpl.Metric))
+			for _, lbl := range smpl.Metric {
+				l[lbl.Name] = lbl.Value
 			}
-			return result
+
+			tmplData := template.AlertTemplateData(l, r.externalLabels, smpl.V)
+			// Inject some convenience variables that are easier to remember for users
+			// who are not used to Go's templating system.
+			defs := []string{
+				"{{$labels := .Labels}}",
+				"{{$externalLabels := .ExternalLabels}}",
+				"{{$value := .Value}}",
+			}
+
+			expand := func(text string) string {
+				tmpl := template.NewTemplateExpander(
+					ctx,
+					strings.Join(append(defs, text), ""),
+					"__alert_"+r.Name(),
+					tmplData,
+					model.Time(timestamp.FromTime(ts)),
+					template.QueryFunc(query),
+					externalURL,
+				)
+				result, err := tmpl.Expand()
+				if err != nil {
+					result = fmt.Sprintf("<error expanding template: %s>", err)
+					level.Warn(r.logger).Log("msg", "Expanding alert template failed", "err", err, "data", tmplData)
+				}
+				return result
+			}
+
+			lb := labels.NewBuilder(smpl.Metric).Del(labels.MetricName)
+
+			for _, l := range r.labels {
+				lb.Set(l.Name, expand(l.Value))
+			}
+			lb.Set(labels.AlertName, r.Name())
+
+			annotations := make(labels.Labels, 0, len(r.annotations))
+			for _, a := range r.annotations {
+				annotations = append(annotations, labels.Label{Name: a.Name, Value: expand(a.Value)})
+			}
+
+			lbs := lb.Labels()
+			h := lbs.Hash()
+			resultFPs[h] = struct{}{}
+
+			// Check whether we already have alerting state for the identifying label set.
+			// Update the last value and annotations if so, create a new alert entry otherwise.
+			if alert, ok := r.active[h]; ok && alert.State != StateInactive {
+				alert.Value = smpl.V
+				alert.Annotations = annotations
+
+				continue
+			}
+
+			r.active[h] = &Alert{
+				Labels:      lbs,
+				Annotations: annotations,
+				ActiveAt:    ts,
+				State:       StatePending,
+				Value:       smpl.V,
+			}
 		}
+	} else {
+		for _, smpl := range res {
+			// Provide the alert information to the template.
+			l := make(map[string]string, len(smpl.Metric))
+			for _, lbl := range smpl.Metric {
+				l[lbl.Name] = lbl.Value
+			}
 
-		lb := labels.NewBuilder(smpl.Metric).Del(labels.MetricName)
+			tmplData := template.AlertTemplateData(l, r.externalLabels, smpl.V)
+			// Inject some convenience variables that are easier to remember for users
+			// who are not used to Go's templating system.
+			defs := []string{
+				"{{$labels := .Labels}}",
+				"{{$externalLabels := .ExternalLabels}}",
+				"{{$value := .Value}}",
+			}
 
-		for _, l := range r.labels {
-			lb.Set(l.Name, expand(l.Value))
-		}
-		lb.Set(labels.AlertName, r.Name())
+			expand := func(text string) string {
+				tmpl := template.NewTemplateExpander(
+					ctx,
+					strings.Join(append(defs, text), ""),
+					"__alert_"+r.Name(),
+					tmplData,
+					model.Time(timestamp.FromTime(ts)),
+					template.QueryFunc(query),
+					externalURL,
+				)
+				result, err := tmpl.Expand()
+				if err != nil {
+					result = fmt.Sprintf("<error expanding template: %s>", err)
+					level.Warn(r.logger).Log("msg", "Expanding alert template failed", "err", err, "data", tmplData)
+				}
+				return result
+			}
 
-		annotations := make(labels.Labels, 0, len(r.annotations))
-		for _, a := range r.annotations {
-			annotations = append(annotations, labels.Label{Name: a.Name, Value: expand(a.Value)})
-		}
+			lb := labels.NewBuilder(smpl.Metric).Del(labels.MetricName)
 
-		lbs := lb.Labels()
-		h := lbs.Hash()
-		resultFPs[h] = struct{}{}
+			for _, l := range r.labels {
+				lb.Set(l.Name, expand(l.Value))
+			}
+			lb.Set(labels.AlertName, r.Name())
 
-		// Check whether we already have alerting state for the identifying label set.
-		// Update the last value and annotations if so, create a new alert entry otherwise.
-		if alert, ok := r.active[h]; ok && alert.State != StateInactive {
-			alert.Value = smpl.V
-			alert.Annotations = annotations
-			continue
-		}
+			annotations := make(labels.Labels, 0, len(r.annotations))
+			for _, a := range r.annotations {
+				annotations = append(annotations, labels.Label{Name: a.Name, Value: expand(a.Value)})
+			}
 
-		r.active[h] = &Alert{
-			Labels:      lbs,
-			Annotations: annotations,
-			ActiveAt:    ts,
-			State:       StatePending,
-			Value:       smpl.V,
+			lbs := lb.Labels()
+			h := lbs.Hash()
+			resultResolved[h] = struct{}{}
+
+			// Check whether we already have alerting state for the identifying label set.
+			// Update the last value and annotations if so, create a new alert entry otherwise.
+			if alert, ok := r.active[h]; ok && alert.State != StateInactive {
+				alert.Value = smpl.V
+				alert.Annotations = annotations
+				alert.Labels = lbs
+				continue
+			}
+
 		}
 	}
 
 	// Check if any pending alerts should be removed or fire now. Write out alert timeseries.
 	for fp, a := range r.active {
+		if a.State == StateInactive {
+			delete(r.active, fp)
+		}
 		if _, ok := resultFPs[fp]; !ok {
 			// If the alert was previously firing, keep it around for a given
 			// retention time so it is reported as resolved to the AlertManager.
@@ -407,7 +477,7 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 	// We have already acquired the lock above hence using SetHealth and
 	// SetLastError will deadlock.
 	r.health = HealthGood
-	r.lastError = err
+	r.lastError = nil
 	return vec, nil
 }
 
@@ -469,12 +539,14 @@ func (r *AlertingRule) sendAlerts(ctx context.Context, ts time.Time, resendDelay
 	alerts := []*Alert{}
 	r.ForEachActiveAlert(func(alert *Alert) {
 		if alert.needsSending(ts, resendDelay) {
+
 			alert.LastSentAt = ts
 			// Allow for a couple Eval or Alertmanager send failures
 			delta := resendDelay
 			if interval > resendDelay {
 				delta = interval
 			}
+			//firing time
 			alert.ValidUntil = ts.Add(3 * delta)
 			anew := *alert
 			alerts = append(alerts, &anew)

@@ -4,6 +4,8 @@ package nethttp
 
 import (
 	"net/http"
+//"log"
+//"runtime"
 
 	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
@@ -15,6 +17,11 @@ type statusCodeTracker struct {
 }
 
 func (w *statusCodeTracker) WriteHeader(status int) {
+/*	b := make([]byte, 1<<16)
+	n := runtime.Stack(b, false)
+	if n > 0 {
+		log.Println(string(b[:n]))
+	}*/
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }

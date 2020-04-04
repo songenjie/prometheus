@@ -26,7 +26,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 
@@ -36,6 +36,11 @@ import (
 	"github.com/prometheus/prometheus/pkg/value"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/storage"
+	"gopkg.in/fsnotify/fsnotify.v1"
+	//        "github.com/prometheus/prometheus/config"
+	logto "log"
+	"os"
+	"strings"
 )
 
 // RuleHealth describes the health state of a rule.
@@ -162,16 +167,32 @@ type QueryFunc func(ctx context.Context, q string, t time.Time) (promql.Vector, 
 // It converts scalar into vector results.
 func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
 	return func(ctx context.Context, qs string, t time.Time) (promql.Vector, error) {
-		q, err := engine.NewInstantQuery(q, qs, t)
+		qfunc, err := engine.NewInstantQuery(q, qs, t)
 		if err != nil {
 			return nil, err
 		}
-		res := q.Exec(ctx)
+		res := qfunc.Exec(ctx)
 		if res.Err != nil {
 			return nil, res.Err
 		}
 		switch v := res.Value.(type) {
 		case promql.Vector:
+			if len(v) == 0 {
+				qfunc, err = engine.NewInstantQuerySloved(q, qs, t)
+				if err != nil {
+					return nil, err
+				}
+				res = qfunc.Exec(ctx)
+				if res.Err != nil {
+					return nil, res.Err
+				}
+				switch v := res.Value.(type) {
+				case promql.Vector:
+					return v, errors.New("this is a Resolved func")
+				default:
+					return nil, errors.New("rule result is not a vector or scalar")
+				}
+			}
 			return v, nil
 		case promql.Scalar:
 			return promql.Vector{promql.Sample{
@@ -514,7 +535,6 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 				g.metrics.evalFailures.Inc()
 				return
 			}
-
 			if ar, ok := rule.(*AlertingRule); ok {
 				ar.sendAlerts(ctx, ts, g.opts.ResendDelay, g.interval, g.opts.NotifyFunc)
 			}
@@ -706,13 +726,13 @@ func (g *Group) RestoreForState(ts time.Time) {
 
 // The Manager manages recording and alerting rules.
 type Manager struct {
-	opts     *ManagerOptions
-	groups   map[string]*Group
-	mtx      sync.RWMutex
-	block    chan struct{}
-	restored bool
-
-	logger log.Logger
+	opts      *ManagerOptions
+	groups    map[string]*Group
+	mtx       sync.RWMutex
+	block     chan struct{}
+	restored  bool
+	iswatched bool
+	logger    log.Logger
 }
 
 // Appendable returns an Appender.
@@ -736,8 +756,9 @@ type ManagerOptions struct {
 	OutageTolerance time.Duration
 	ForGracePeriod  time.Duration
 	ResendDelay     time.Duration
-
-	Metrics *Metrics
+	Autoreloaddir   string
+	externalLabels  labels.Labels
+	Metrics         *Metrics
 }
 
 // NewManager returns an implementation of Manager, ready to be started
@@ -765,6 +786,9 @@ func NewManager(o *ManagerOptions) *Manager {
 // Run starts processing of the rule manager.
 func (m *Manager) Run() {
 	close(m.block)
+	if !m.iswatched {
+		go m.watch(m.opts.Autoreloaddir + "/*.yaml")
+	}
 }
 
 // Stop the rule manager's rule evaluation cycles.
@@ -831,6 +855,112 @@ func (m *Manager) Update(interval time.Duration, files []string, externalLabels 
 	wg.Wait()
 	m.groups = groups
 
+	return nil
+}
+
+func (m *Manager) watch(p string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		logto.Println(err)
+		return
+	}
+	m.iswatched = true
+	if idx := strings.LastIndex(p, "/"); idx > -1 {
+		p = p[:idx]
+	} else {
+		p = "./"
+	}
+	logto.Printf("createdir %s", p)
+	if _, err := os.Stat(p); os.IsNotExist(err) {
+		if e := os.Mkdir(p, 0666); e != nil {
+			logto.Println(err)
+			return
+		}
+	}
+	if err := watcher.Add(p); err != nil {
+		logto.Println(err)
+		return
+	}
+
+	for {
+		select {
+		case event := <-watcher.Events:
+			// fsnotify sometimes sends a bunch of events without name or operation.
+			// It's unclear what they are and why they are sent - filter them out.
+			if len(event.Name) == 0 {
+				break
+			}
+			// Everything but a chmod requires rereading.
+			if event.Op^fsnotify.Chmod == 0 {
+				break
+			}
+			// Changes to a file can spawn various sequences of events with
+			// different combinations of operations. For all practical purposes
+			// this is inaccurate.
+			// The most reliable solution is to reload everything if anything happens.
+			if event.Op^fsnotify.Remove == 0 || event.Op^fsnotify.Rename == 0 {
+				// REMOVE
+				// RENAME: RENAME -> CREATE -> WRITE -> WRITE
+				logto.Printf("remove %s", []string{event.Name})
+				m.MiniUpdate(time.Duration(promql.GetDefaultEvaluationInterval())*time.Millisecond, []string{event.Name}, true)
+			} else {
+				//CREATE -> WRITE
+				//WRITE -> WRITE
+
+				logto.Printf("write %s", []string{event.Name})
+				m.MiniUpdate(time.Duration(promql.GetDefaultEvaluationInterval())*time.Millisecond, []string{event.Name}, false)
+			}
+		}
+	}
+}
+
+//MiniUpdate will only update partial rules.
+func (m *Manager) MiniUpdate(interval time.Duration, files []string, isRemove bool) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	if isRemove {
+		for _, fname := range files {
+			for gn, oldg := range m.groups {
+				if strings.HasSuffix(gn, fname) {
+					delete(m.groups, gn)
+					go func(g *Group) {
+						g.stop()
+					}(oldg)
+				}
+			}
+		}
+		return nil
+	}
+	//	var cfg *config.Config
+	//      groups, errs := m.LoadGroups(interval, cfg.GlobalConfig.ExternalLabels, files...)
+	groups, errs := m.LoadGroups(interval, nil, files...)
+	if errs != nil {
+		for _, e := range errs {
+			level.Error(m.logger).Log("msg", "loading groups failed", "err", e)
+		}
+		return errors.New("error loading rules, previous rule set restored")
+	}
+	m.restored = true
+	var wg sync.WaitGroup
+	for _, newg := range groups {
+		wg.Add(1)
+		// If there is an old group with the same identifier, stop it and wait for
+		// it to finish the current iteration. Then copy it into the new group.
+		gn := groupKey(newg.name, newg.file)
+		oldg, ok := m.groups[gn]
+		m.groups[gn] = newg
+		go func(newg *Group) {
+			if ok {
+				oldg.stop()
+				newg.CopyState(oldg)
+			}
+			go func() {
+				newg.run(m.opts.Context)
+			}()
+			wg.Done()
+		}(newg)
+	}
+	wg.Wait()
 	return nil
 }
 
